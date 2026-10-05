@@ -41,6 +41,10 @@ def day(value) -> str:
 def inside(root: Path, name: str) -> Path:
     """root/name, refused unless it resolves to a file directly inside root. The ticker rule
     already makes an escape impossible; this is the second lock, at the point of use."""
+    # A separator of either kind is refused outright: on Linux a backslash is an ordinary
+    # character, so "..\a.json" would otherwise pass as a file name.
+    if "/" in name or "\\" in name:
+        raise BadInput("That path is outside the folder it belongs in.")
     base = root.resolve()
     path = (base / name).resolve()
     if path.parent != base:

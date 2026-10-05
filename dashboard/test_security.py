@@ -6,6 +6,8 @@
 import http.client
 import json
 import threading
+from pathlib import Path
+import sys
 import time
 from http.server import ThreadingHTTPServer
 
@@ -112,6 +114,8 @@ def test_the_page_can_read_its_token(port):
 def launched(monkeypatch):
     got = []
     monkeypatch.setattr(server, "start_run", lambda *a: got.append(a) or {"id": "x", "ticker": a[0]})
+    # CI installs without the desk's own .venv; any existing interpreter will do for the check.
+    monkeypatch.setattr(server, "DESK_PYTHON", Path(sys.executable))
     return got
 
 
