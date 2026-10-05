@@ -1,0 +1,24 @@
+# Weekly dependency updates, grouped so each part arrives as one pull request.
+# Security updates still open immediately.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /desk
+    schedule:
+      interval: weekly
+    groups:
+      desk:
+        patterns: ["*"]
+        update-types: [minor, patch]
+  - package-ecosystem: pip
+    directory: /edgedesk
+    schedule:
+      interval: weekly
+    groups:
+      edgedesk:
+        patterns: ["*"]
+        update-types: [minor, patch]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly

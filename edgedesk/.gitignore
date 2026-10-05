@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+
+# Runs, snapshots, caches and settings live in ~/.edge-desk, never in the repo.
+# Nothing here should ever contain a key or a position.
+*.env
+
+# rendered reports are output, not source. Anchored to the top level: unanchored, this also
+# swallowed the source package edgedesk/reports/ and three modules never reached git (audit R2-10).
+/reports/

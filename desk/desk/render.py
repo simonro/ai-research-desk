@@ -1,0 +1,237 @@
+"""Turn a desk run into a markdown memo, a JSON bundle, and an Obsidian note."""
+
+from __future__ import annotations
+
+import json
+import re
+import subprocess
+from datetime import datetime
+from pathlib import Path
+
+from desk.config import QMD, VAULT_MEMOS_DIR
+from desk.debate import DESKS
+from desk.views import VIEWS
+
+_EXEC_SUMMARY = re.compile(r"\*\*Executive Summary\*\*:\s*(.+?)(?:\n\s*\n|\*\*Investment Thesis)", re.S)
+_LEVEL_NAMES = (("entry_zone", "Entry zone"), ("stop", "Stop / thesis break"),
+                ("first_target", "First target"), ("trim", "Trim / take profit"))
+_TARGET_VERB = {"raised": "raised to", "lowered": "lowered to", "new": "set at", "kept": "kept at"}
+_ANCHOR_NAMES = (("last_close", "Last settled close"), ("sma_20", "20-day average"),
+                 ("sma_50", "50-day average"), ("sma_200", "200-day average"), ("high_20d", "20-day high"),
+                 ("low_20d", "20-day low"), ("high_52w", "52-week high"), ("low_52w", "52-week low"),
+                 ("atr_14", "Avg daily range (ATR 14)"))
+
+
+_NAMES = {"A": "quant desk", "B": "veterans", "C": "edge desk"}
+
+
+_RANGE_DASH = re.compile(r"(?<=[\d$%x])\s*[\u2013\u2014]\s*(?=[\d$])")
+_OTHER_DASH = re.compile(r"\s*[\u2013\u2014]\s*")
+
+
+def plain_dashes(text: str) -> str:
+    """House style: no em or en dashes in anything the reader sees. Team reports are stored verbatim
+    (the fact check matches quotes against them character for character), so only what is rendered
+    for reading is cleaned: a dash between figures becomes a hyphen, any other becomes a comma."""
+    return _OTHER_DASH.sub(", ", _RANGE_DASH.sub("-", text))
+
+
+def markdown(bundle: dict) -> str:
+    ticker, as_of = bundle["ticker"], bundle["date"]
+    ta, aihf, edge = bundle.get("tradingagents"), bundle.get("ai_hedge_fund"), bundle.get("edge_desk")
+    shared = aihf or edge or {}
+    horizons = bundle["horizons"]
+    close = shared.get("last_close")
+
+    out = [f"# {ticker} desk memo, {as_of}" if horizons else f"# {ticker} desk reports, {as_of}", "",
+           f"Position: **{'you own it' if bundle['owns'] else 'not owned (new position)'}**"
+           + (f"  |  Last settled close ${close:,.2f}" if isinstance(close, (int, float)) else "")
+           + (f" ({bundle['price_session']}, the one close every team used)" if bundle.get("price_session") else ""), ""]
+    if horizons:
+        out += ["## At a glance", "", "| Verdict | Rating | Agreement | Action for you |", "|---|---|---|---|"]
+        for key, h in horizons.items():
+            rating = h["outcome"]["rating"]
+            label = VIEWS[key]["label"]
+            status = h["outcome"].get("status")
+            shown = rating.upper() if rating else {"gridlock": "GRIDLOCK", "withheld": "WITHHELD"}.get(
+                status, "NO CONSENSUS")
+            out.append(f"| {label} | **{shown}** | {h['outcome']['conviction']} | {h['action']} |")
+        out.append("")
+        native = bundle.get("native") or {}
+        if native:
+            out += ["_Each team's own call, on its own clock (provenance, not compared): "
+                    + ", ".join(f"{_NAMES[d]} {v.get('rating') or 'withheld'} ({v.get('timeframe') or 'clock not stated'})"
+                                for d, v in native.items()) + "._", ""]
+    else:
+        out += ["_The engines were run without a debate: each report stands on its own and there is no "
+                "combined rating._", ""]
+    out += valuation_section(shared.get("valuation") or {})
+
+    for key, h in horizons.items():
+        out += horizon_section(key, h)
+
+    out += ["## Desk reports" + (" (before horizons)" if horizons else ""), "",
+            "| Desk | Engine rating | Core call |", "|---|---|---|"]
+    if ta:
+        out.append(f"| TradingAgents | {ta['rating']} | {_one_line(ta_summary(ta))} |")
+    if aihf:
+        v = aihf["verdict"]
+        confidence = f"{v['confidence']:.0f}%" if isinstance(v.get("confidence"), (int, float)) else "n/a"
+        out.append(f"| ai-hedge-fund | {aihf['rating']} ({confidence}) | {_one_line(v.get('summary') or '')} |")
+    if edge:
+        sig = edge.get("swing") or {}
+        score = f" ({edge['score']:.1f}/100)" if isinstance(edge.get("score"), (int, float)) else ""
+        out.append(f"| Edge Desk | {edge.get('rating') or 'Withheld'}{score}, long term | "
+                   f"{_one_line('Swing setup ' + str(sig.get('signal') or 'n/a') + ': ' + str(sig.get('why') or ''))} |")
+    out.append("")
+
+    anchors = shared.get("anchors") or {}
+    if anchors:
+        out += ["<details><summary>Computed price anchors</summary>", "", "| Anchor | Value |", "|---|---|"]
+        out += [f"| {name} | {anchors[k]} |" for k, name in _ANCHOR_NAMES if anchors.get(k) is not None]
+        out += ["", "</details>", ""]
+
+    costs = bundle["costs"]
+    parts = [f"{label} {_usd(costs.get(k))}" for k, label, present in
+             (("tradingagents", "TradingAgents", ta), ("ai_hedge_fund", "ai-hedge-fund", aihf),
+              ("edge_desk", "Edge Desk", edge)) if present]
+    if horizons:
+        parts.append(f"horizon ratings + debates + memos {_usd(costs['desk'])}")
+    billing = " All on the Max plan: nothing billed." if costs.get("billing") == "max" else ""
+    out += ["---", f"Cost: {_usd(costs['total'])} ({', '.join(parts)}).{billing} Files: `{bundle['files']['json']}`",
+            "", "_Research output for the investor's own decision; not investment advice._", ""]
+    return plain_dashes("\n".join(out))
+
+
+def valuation_section(panel: dict) -> list[str]:
+    if not panel:
+        return []
+    eps = f"{panel['eps_ttm']:.2f}" if isinstance(panel.get("eps_ttm"), (int, float)) else "n/a"
+    out = ["## Valuation", "", f"Price ${panel['price']}  |  TTM EPS {eps}  |  P/E now {panel['pe_now']}", "",
+           "| Method | Fair value | Price vs it |", "|---|---|---|"]
+    h = panel.get("own_history")
+    if h:
+        out.append(f"| Own-history multiple (median P/E {h['median_pe']}, {h['periods']} quarters) | "
+                   f"{h['fair_low']} / **{h['fair_mid']}** / {h['fair_high']} | {h['price_vs_mid']:+.1%} vs mid |")
+    p = panel.get("peg")
+    if p and p.get("fair_value"):
+        out.append(f"| PEG = 1 (EPS growth {p['eps_cagr']:.1%} a year{', P/E capped at 30' if p['capped'] else ''}) | "
+                   f"**{p['fair_value']}** | {p['price_vs_fair']:+.1%} |")
+    elif p:
+        out.append(f"| PEG = 1 | n/a | {p['note']} |")
+    s = panel.get("street")
+    if s:
+        out.append(f"| Street ({s['analysts']} analysts, {s['rating']}) | low {s['target_low']} / "
+                   f"**mean {s['target_mean']}** / high {s['target_high']} | mean {s['upside_to_mean']:+.1%} |")
+    t = panel.get("target_changes") or {}
+    if t.get("count"):
+        out += ["", f"Recent price-target actions: {t['count']} ({t['raised']} raised, {t['lowered']} lowered)"]
+        out += [f"- {c['date']} {c['firm']}: {c['action']}{' ' + c['rating'] if c['rating'] else ''}, "
+                f"target {_TARGET_VERB.get(c['direction'], 'at')} {c['target']:g}" for c in t["latest"]]
+    out.append("")
+    return out
+
+
+def horizon_section(key: str, h: dict) -> list[str]:
+    result, memo = h["outcome"], h["memo"]
+    if result.get("status") == "withheld":         # desk/eligibility.py: nothing was rated
+        return [f"## {VIEWS[key]['label']}: WITHHELD", "", f"> {memo['headline']}", "",
+                memo["summary"], "", f"**Action for you: {h['action']}.**", ""]
+    rating = (result["rating"].upper() if result["rating"] else
+              "GRIDLOCK" if result.get("status") == "gridlock" else "NO CONSENSUS")
+    out = [f"## {VIEWS[key]['label']}: {rating} ({result['conviction']})", "",
+           f"> {memo['headline']}", "", f"_{result['how']}._",
+           *([f"_{result['note']}._"] if result.get("note") else []), "",
+           f"**Action for you: {h['action']}.** {memo['action_note']}", "",
+           "### Summary", memo["summary"], "", "### Valuation view", memo["valuation_view"], "",
+           "### Each desk's rating", *[f"- {DESKS[d]}: **{r['rating'] or 'No view'}**"
+                                       + (f" ({r['timeframe']})" if r.get("timeframe") else "")
+                                       + f". {r['rationale']}"
+                                    for d, r in h["restated"].items()], ""]
+    if h.get("debate"):
+        out += ["### Debate", ""]
+        for t in h["debate"]["turns"]:
+            out.append(f"**Round {t['round']}, {DESKS[t['desk']]}: {t['decision']} at {t['rating']}.** "
+                       f"{t['argument']}")
+            if t["what_changed_my_mind"]:
+                out.append(f"  - What changed its mind: {t['what_changed_my_mind']}")
+            if t["note"]:
+                out.append(f"  - Moderator: {t['note']}")
+            out.append("")
+    if memo.get("disagreement_crux"):
+        out += ["### The crux", memo["disagreement_crux"], ""]
+    if memo.get("super_manager_view"):
+        out += ["### Super Manager view", memo["super_manager_view"], ""]
+    out += ["### Why", *[f"- {x}" for x in memo["key_reasons"]], "",
+            "### Risks", *[f"- {x}" for x in memo["key_risks"]], "",
+            "### Price levels", "", "| Level | Price | Why |", "|---|---|---|"]
+    out += [f"| {name} | {memo['levels'][k]['price']} | {_one_line(memo['levels'][k]['reason'])} |"
+            for k, name in _LEVEL_NAMES]
+    out += ["", "### What to watch", *[f"- {x}" for x in memo["what_to_watch"]], ""]
+    return out
+
+
+def vault_note(bundle: dict, memo_md: str) -> str:
+    horizons = bundle["horizons"]
+    # Long term leads, unless it was withheld (no levels): then the first horizon that has them.
+    rated = [h for h in horizons.values() if h["memo"].get("levels")]
+    lead = horizons.get("long_term") if horizons.get("long_term", {}).get("memo", {}).get("levels") else \
+        (rated[0] if rated else next(iter(horizons.values())))
+    front = ["---", "type: thesis", "bucket: investing", "status: active",
+             f"created: {bundle['date']}", f"updated: {bundle['date']}", "tags: [investing, desk-memo]",
+             f"ticker: {bundle['ticker']}", f"owned: {'true' if bundle['owns'] else 'false'}",
+             f"conviction: {lead['outcome']['conviction']}"]
+    for key, h in horizons.items():
+        front.append(f"rating_{key}: {h['outcome']['rating'] or ('Withheld' if h['outcome'].get('status') == 'withheld' else 'No consensus')}")
+    levels = lead["memo"].get("levels") or {}
+    if levels:
+        front += [f"target: \"{levels['first_target']['price']}\"", f"risk: \"{levels['stop']['price']}\""]
+    front += ["---", ""]
+    return "\n".join(front) + memo_md
+
+
+def write_all(bundle: dict, memos_dir: Path, to_vault: bool, say=print) -> dict:
+    stem = f"{bundle['ticker']}-{bundle['date']}"
+    memos_dir.mkdir(parents=True, exist_ok=True)
+    md_path, json_path = memos_dir / f"{stem}.md", memos_dir / f"{stem}.json"
+    bundle["files"] = {"markdown": str(md_path), "json": str(json_path)}
+    memo_md = markdown(bundle)
+    md_path.write_text(memo_md, encoding="utf-8")
+    json_path.write_text(json.dumps(bundle, indent=2), encoding="utf-8")
+    paths = {"markdown": md_path, "json": json_path}
+    if to_vault and VAULT_MEMOS_DIR:
+        VAULT_MEMOS_DIR.mkdir(parents=True, exist_ok=True)
+        note = VAULT_MEMOS_DIR / f"{bundle['date']} {bundle['ticker']} desk memo.md"
+        note.write_text(vault_note(bundle, memo_md), encoding="utf-8")
+        paths["vault"] = note
+        _reindex_vault(say)
+    return paths
+
+
+def ta_summary(ta: dict) -> str:
+    decision = ta["reports"].get("final_trade_decision", "")
+    match = _EXEC_SUMMARY.search(decision)
+    return match.group(1).strip() if match else decision[:400]
+
+
+def _reindex_vault(say) -> None:
+    if not QMD or not QMD.exists():
+        return
+    try:
+        for step in ("update", "embed"):
+            subprocess.run([str(QMD), step], capture_output=True, timeout=300, check=False)
+    except (OSError, subprocess.SubprocessError) as exc:
+        say(f"  (vault search re-index skipped: {exc})")
+
+
+def _one_line(value: str, limit: int = 260) -> str:
+    flat = " ".join(str(value).split()).replace("|", "/")
+    return flat if len(flat) <= limit else flat[: limit - 3].rstrip() + "..."
+
+
+def _usd(value) -> str:
+    return "n/a (reused)" if value is None else f"${value:.2f}"
+
+
+def stamp() -> str:
+    return datetime.now().isoformat(timespec="seconds")

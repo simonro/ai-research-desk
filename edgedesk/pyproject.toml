@@ -1,0 +1,31 @@
+[project]
+name = "edge-desk"
+version = "0.1.0"
+description = "Evidence-first stock research: buy / hold / sell with computed levels, and a rating that says how much it has been tested"
+requires-python = ">=3.12"
+dependencies = [
+    "requests>=2.32",
+    "python-dotenv>=1.0",
+    "pydantic>=2.7",
+    "yfinance>=0.2.40",
+    "PyYAML>=6.0",
+    "pandas>=2.0",
+    "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+llm = ["claude-agent-sdk>=0.1"]
+
+[project.scripts]
+edgedesk = "edgedesk.jobs.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["edgedesk"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

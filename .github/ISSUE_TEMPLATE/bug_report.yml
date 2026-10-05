@@ -1,0 +1,57 @@
+name: Bug report
+description: Something is broken, or a rating or number looks wrong.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. **Do not paste API keys, login files, or your positions.**
+        A ticker, a date and the error are usually enough.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you ran, what you expected, and what you saw instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. DESK_PLAN=claude, ran MSFT with all three teams and debate on
+        2. Opened the run in the dashboard
+        3. ...
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Install or startup
+        - Claude plan (claude CLI) or ChatGPT plan (codex CLI)
+        - A team (TradingAgents, ai-hedge-fund, Edge Desk)
+        - Debate, ratings or memo
+        - Market data (Alpaca, Yahoo, SEC EDGAR)
+        - Dashboard or PDF
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The release you downloaded, or the commit if you cloned.
+      placeholder: v1.0.0
+  - type: input
+    id: system
+    attributes:
+      label: System
+      placeholder: Windows 11, Python 3.12, claude 2.x or codex 0.160
+  - type: textarea
+    id: logs
+    attributes:
+      label: Errors or logs
+      description: The message from the run, or the last lines of desk.log / the engine logs in the run folder.
+      render: text

@@ -1,0 +1,24 @@
+name: Feature request
+description: Suggest something the desk should do.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you are trying to do
+      description: What are you trying to see or decide, and what gets in the way today?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you would like
+    validations:
+      required: true
+  - type: checkboxes
+    id: fit
+    attributes:
+      label: Fit
+      options:
+        - label: This keeps the desk research only (it never places orders)
+        - label: This keeps it local first (no new account, cloud service or telemetry)

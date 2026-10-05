@@ -1,0 +1,113 @@
+name: test-2
+strategies:
+- name: deep-value
+  display_name: Deep Value
+  weight: 1.0
+  models:
+  - name: graham
+    weight: 2.0
+    params: {}
+  - name: buffett
+    weight: 1.0
+    params: {}
+  - name: munger
+    weight: 1.0
+    params: {}
+  blend:
+    method: conviction_weighted
+    gross_target: 1.0
+    market_neutral: false
+- name: fundamental-ls
+  display_name: Fundamental L/S
+  weight: 1.0
+  models:
+  - name: buffett
+    weight: 1.0
+    params: {}
+  - name: munger
+    weight: 1.0
+    params: {}
+  - name: graham
+    weight: 1.0
+    params: {}
+  - name: lynch
+    weight: 1.0
+    params: {}
+  - name: druckenmiller
+    weight: 1.0
+    params: {}
+  blend:
+    method: conviction_weighted
+    gross_target: 1.0
+    market_neutral: true
+- name: inflections
+  display_name: Inflections
+  weight: 1.0
+  models:
+  - name: druckenmiller
+    weight: 1.0
+    params: {}
+  - name: lynch
+    weight: 1.0
+    params: {}
+  blend:
+    method: conviction_weighted
+    gross_target: 1.0
+    market_neutral: false
+- name: earnings-drift
+  display_name: Earnings Drift
+  weight: 1.0
+  models:
+  - name: pead
+    weight: 1.0
+    params: {}
+  blend:
+    method: conviction_weighted
+    gross_target: 1.0
+    market_neutral: false
+- name: street-consensus
+  display_name: Street Consensus
+  weight: 1.0
+  models:
+  - name: analyst_consensus
+    weight: 1.0
+    params: {}
+  blend:
+    method: conviction_weighted
+    gross_target: 1.0
+    market_neutral: false
+- name: custom
+  display_name: null
+  weight: 1.0
+  models:
+  - name: pead
+    weight: 1.0
+    params: {}
+  - name: analyst_consensus
+    weight: 1.0
+    params: {}
+  - name: buffett
+    weight: 1.0
+    params: {}
+  - name: munger
+    weight: 1.0
+    params: {}
+  - name: graham
+    weight: 1.0
+    params: {}
+  - name: lynch
+    weight: 1.0
+    params: {}
+  - name: druckenmiller
+    weight: 1.0
+    params: {}
+  blend:
+    method: conviction_weighted
+    gross_target: 1.0
+    market_neutral: false
+risk:
+  max_position_pct: 0.25
+  max_gross_exposure: 1.0
+capital: 100000.0
+rebalance: daily
+benchmark: SPY

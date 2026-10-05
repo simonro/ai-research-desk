@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# Each part has its own environment on a real install (their libraries conflict), so each gets its
+# own job here. No job calls a model or a market-data service: the tests use fakes.
+jobs:
+  desk:
+    name: Desk and dashboard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -r desk/requirements.txt pytest
+      - run: python -m pytest tests -q
+        working-directory: desk
+      - run: python -m pytest -q
+        working-directory: dashboard
+        env:
+          PYTHONPATH: ../desk
+
+  edgedesk:
+    name: Edge Desk
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -e edgedesk pytest
+      - run: python -m pytest tests -q
+        working-directory: edgedesk
+
+  ai-hedge-fund:
+    name: ai-hedge-fund
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -e engines/ai-hedge-fund pytest
+      # One upstream test reads a model registry this copy does not ship; it fails upstream too.
+      - run: python -m pytest hedge_fund -q --deselect hedge_fund/llm/test_client.py::test_provider_for_reads_the_registry
+        working-directory: engines/ai-hedge-fund

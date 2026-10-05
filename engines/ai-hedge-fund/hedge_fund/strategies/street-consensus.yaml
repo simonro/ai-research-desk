@@ -1,0 +1,11 @@
+# Street consensus: systematic, current-only.
+# The sell side's mean rating and price target, as of today. There is no free
+# consensus history, so this pod abstains on any date older than a week: it is
+# for live and paper runs, and sits out of backtests rather than faking them.
+name: street-consensus
+display_name: Street Consensus
+models:
+  - name: analyst_consensus
+blend:
+  method: conviction_weighted
+  gross_target: 1.0
