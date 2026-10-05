@@ -510,13 +510,14 @@ def test_each_section_reports_its_real_outcome_as_it_finishes(run, monkeypatch):
     monkeypatch.setattr(analysis.research, "second_look", lambda *a, **k: {"ok": True})
     monkeypatch.setattr(analysis.research, "headline_read", lambda *a, **k: {"ok": False, "error": "no headlines"})
     monkeypatch.setattr(analysis.research, "filing_research", lambda *a, **k: {"ok": True})
-    seen = []
+    seen, texts = [], []
     analysis.analyze(run, lenses=("deep_value",), filings=[], filings_error="none",
-                     on_section=lambda name, ok, error: seen.append((name, ok, error)))
+                     on_section=lambda name, ok, error, text="": seen.append((name, ok, error)) or texts.append(text))
     assert seen == [("lens:deep_value", True, None), ("bull", True, None),
                     ("bear", False, "failed validation twice"), ("synthesis", True, None),
                     ("second_look", True, None), ("headline_read", False, "no headlines"),
                     ("filing_research", True, None)]
+    assert texts[0] == "Margins are strong." and texts[2] == ""      # a lens's prose; a failed bear has none
 
 
 # ---------------------------------------------------------------------------

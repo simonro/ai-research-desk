@@ -113,14 +113,15 @@ def _call(prompt: str, spec: dict, run: dict, name: str,
 
 def analyze(run: dict, lenses: tuple[str, ...] | None = None,
             say=lambda *_: None, filings: list[dict] | None = None,
-            filings_error: str | None = None, on_section=lambda *_: None) -> dict:
+            filings_error: str | None = None, on_section=lambda *_, **__: None) -> dict:
     """Run the whole layer over one finished deterministic run.
 
     Takes the run as input and returns the block to attach to it. It never
     mutates the run's numbers, because it is not given the chance to: only the
     rendered brief goes into a prompt.
 
-    *on_section(name, ok, error)* is called as each section finishes, with its real outcome, so
+    *on_section(name, ok, error, text=...)* is called as each section finishes, with its real outcome
+    and the opening of what it wrote (for a live view), so
     a watcher never has to infer "done" from the next section starting (audit R2-17).
     """
     ok, note = headless.available()
@@ -140,7 +141,7 @@ def analyze(run: dict, lenses: tuple[str, ...] | None = None,
             section = _call(prompts.lens_prompt(brief, key), prompts.LENS_SCHEMA, run,
                             f"lens:{key}")
             sections[f"lens:{key}"] = section
-            on_section(f"lens:{key}", section.ok, section.error)
+            on_section(f"lens:{key}", section.ok, section.error, text=_opening(section.data))
             if section.ok:
                 lens_results[key] = section.data
 
@@ -148,11 +149,11 @@ def analyze(run: dict, lenses: tuple[str, ...] | None = None,
         say("    bull")
         bull = _call(prompts.bull_prompt(brief), prompts.CASE_SCHEMA, run, "bull")
         sections["bull"] = bull
-        on_section("bull", bull.ok, bull.error)
+        on_section("bull", bull.ok, bull.error, text=_opening(bull.data))
         say("    bear")
         bear = _call(prompts.bear_prompt(brief), prompts.CASE_SCHEMA, run, "bear")
         sections["bear"] = bear
-        on_section("bear", bear.ok, bear.error)
+        on_section("bear", bear.ok, bear.error, text=_opening(bear.data))
 
         synthesis = Section("synthesis", error="skipped: both cases failed")
         if bull.ok or bear.ok:
@@ -164,7 +165,7 @@ def analyze(run: dict, lenses: tuple[str, ...] | None = None,
                 prompts.SYNTHESIS_SCHEMA, run, "synthesis",
                 extra_check=_dissent_is_complete)
         sections["synthesis"] = synthesis
-        on_section("synthesis", synthesis.ok, synthesis.error)
+        on_section("synthesis", synthesis.ok, synthesis.error, text=_opening(synthesis.data))
 
         # The research layer: a second look at the swing call, a read of the
         # headlines, and management's own words from the filings.
@@ -211,9 +212,21 @@ def analyze(run: dict, lenses: tuple[str, ...] | None = None,
     }
 
 
+def _opening(data) -> str:
+    """The main prose of a written section: a lens's read, a case, or the thesis."""
+    data = data or {}
+    return str(data.get("read") or data.get("case") or data.get("thesis") or "").strip()
+
+
 def _report(on_section, name: str, part: dict | None) -> None:
     part = part or {}
-    on_section(name, bool(part.get("ok")), part.get("error"))
+    text = part.get("reason") or part.get("summary") or ""
+    if name == "second_look" and part.get("stance"):
+        text = f"{str(part['stance']).upper()}. {text}"
+    if name == "headline_read" and part.get("ok"):
+        text = (f"{part.get('material')} material headlines: {part.get('positive')} positive, "
+                f"{part.get('negative')} negative.")
+    on_section(name, bool(part.get("ok")), part.get("error"), text=str(text).strip())
 
 
 def _dissent(synthesis: Section, run: dict) -> dict | None:

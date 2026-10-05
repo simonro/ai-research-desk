@@ -44,15 +44,23 @@ STAGES = [("evidence", "Evidence package", "Evidence"), ("rating", "Factors and 
           *[(k, n, "Written analysis") for k, n in WRITTEN]]
 
 
+def _plan() -> str:
+    """The plan Edge Desk ran on, as its own call layer decides it."""
+    from edgedesk.llm import headless
+    return headless.plan() if hasattr(headless, "plan") else "claude"
+
+
 def section_events(events):
     """Edge reports each written section's real outcome as it finishes (audit R2-17). The desk
     used to mark a section "Written" when the next one started, whatever had happened."""
     names = dict(WRITTEN)
 
-    def on_section(step: str, ok: bool, error: str | None) -> None:
+    def on_section(step: str, ok: bool, error: str | None, text: str = "") -> None:
         if step not in names:
             return
-        text = ("Written. The text opens in the finished report." if ok else
+        # The opening of what the section wrote, as the other teams show live. Older Edge Desk
+        # versions report the outcome only, hence the fallback.
+        text = ((gist(text) if text else "Written. The text opens in the finished report.") if ok else
                 "Not written: " + (error or "no reason given").strip().rstrip(".")[:200] + ".")
         events.emit("agent_done", engine="edge", who=names[step], step=step, text=text,
                     failed=not ok)
@@ -117,7 +125,8 @@ def main() -> None:
     llm = run.get("llm") or {}
     if llm.get("usage_limited"):
         # Exit without writing the report: a half-written analysis must not be reused later today.
-        raise SystemExit(f"The Max plan usage limit was reached during Edge Desk's written analysis: "
+        raise SystemExit(f"The {'ChatGPT' if _plan() == 'chatgpt' else 'Claude'} plan stopped Edge Desk's written analysis "
+                         "(usage limit or login): "
                          f"{llm['usage_limited']}")
     sections = llm.get("sections") or {}
 
@@ -159,7 +168,8 @@ def main() -> None:
         "anchors": ev.get("anchors"), "valuation": run.get("valuation"), "levels": run.get("levels"),
         "name": (ev.get("profile") or {}).get("name"),
         "seconds": round(time.time() - started),
-        "usage": {"billing": "max", "usd": 0.0, "usage_limited": llm.get("usage_limited")},
+        "usage": {"billing": "chatgpt" if _plan() == "chatgpt" else "max", "usd": 0.0,
+                  "usage_limited": llm.get("usage_limited")},
         "reused": False,
     }
     out.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")

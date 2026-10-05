@@ -510,6 +510,7 @@ log = Log()
 cb = er.section_events(log)
 cb("bull", True, None)
 cb("bear", False, "failed validation twice")
+cb("bear", True, None, text="Margins are falling and the multiple is rich for that.")
 cb("not_a_step", True, None)
 
 env_file = Path(tempfile.mkdtemp()) / ".env"
@@ -530,8 +531,9 @@ def test_the_edge_runner_reports_real_outcomes_and_lets_edge_settings_win():
                           text=True, timeout=120)
     assert proc.returncode == 0, proc.stderr[-2000:]
     got = json.loads(proc.stdout.strip().splitlines()[-1])
-    bull, bear = got["events"]
-    assert len(got["events"]) == 2
+    bull, bear, written = got["events"]
+    assert len(got["events"]) == 3
+    assert written["text"].startswith("Margins are falling")       # the section's own words, live
     assert bull["failed"] is False and bull["text"].startswith("Written")
     assert bear["failed"] is True and bear["text"] == "Not written: failed validation twice."
     assert got["dropped"] == ["SEC_USER_AGENT"] and got["env"] == {"DESK_EVENTS": "keep"}

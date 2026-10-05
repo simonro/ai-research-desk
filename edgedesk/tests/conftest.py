@@ -179,3 +179,10 @@ def _no_filing_fetches(monkeypatch):
     """The research layer reads filings from the SEC. Tests never do."""
     monkeypatch.setattr("edgedesk.llm.analysis._load_filings",
                         lambda run: ([], "filings are not fetched in tests"))
+
+
+@pytest.fixture(autouse=True)
+def _claude_plan_by_default(monkeypatch):
+    """The user's own plan setting must not decide which path a test takes."""
+    monkeypatch.delenv("EDGE_DESK_PLAN", raising=False)
+    monkeypatch.delenv("DESK_PLAN", raising=False)
