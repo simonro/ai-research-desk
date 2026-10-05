@@ -16,6 +16,9 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
+# The TradingAgents commit this release is tested on (also pinned as the git submodule).
+TRADINGAGENTS_URL = "https://github.com/TauricResearch/TradingAgents.git"
+TRADINGAGENTS_COMMIT = "dffff22951ce3b57ef6ebc127558f6014167b5a2"
 HOME_DESK = Path.home() / ".hedge-desk"
 PARTS = [
     ("desk", ROOT / "desk", ["-r", "requirements.txt"]),
@@ -47,10 +50,24 @@ def venv_python(folder: Path) -> Path:
     return folder / ".venv" / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
 
 
+def ensure_tradingagents() -> None:
+    ta = ROOT / "engines" / "TradingAgents"
+    if not (ta / "pyproject.toml").exists():
+        # A git clone has it as a submodule; a ZIP download has an empty folder, so it is cloned
+        # from the original project and checked out at the exact commit this release was tested on.
+        if (ROOT / ".git").exists():
+            print("Fetching TradingAgents (git submodule)...")
+            subprocess.run(["git", "submodule", "update", "--init"], cwd=ROOT, check=True)
+        else:
+            print(f"Fetching TradingAgents at {TRADINGAGENTS_COMMIT[:7]}...")
+            if ta.exists() and not any(ta.iterdir()):
+                ta.rmdir()
+            subprocess.run(["git", "clone", "--quiet", TRADINGAGENTS_URL, str(ta)], check=True)
+            subprocess.run(["git", "-C", str(ta), "checkout", "--quiet", TRADINGAGENTS_COMMIT], check=True)
+
+
 def main() -> None:
-    if not (ROOT / "engines" / "TradingAgents" / "pyproject.toml").exists():
-        print("Fetching TradingAgents (git submodule)...")
-        subprocess.run(["git", "submodule", "update", "--init"], cwd=ROOT, check=True)
+    ensure_tradingagents()
     py = python312()
     for name, folder, spec in PARTS:
         print(f"\n== {name}")
