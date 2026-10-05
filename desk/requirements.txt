@@ -1,4 +1,4 @@
-anthropic>=1.6
+anthropic>=1.11.0
 python-dotenv
 pytest
 yfinance==1.7.0  # symbol card in the dashboard (profile, earnings date, dividend)
