@@ -83,8 +83,34 @@ def replay_run(ticker: str, own: bool) -> dict:
 ENGINES = ("quant", "vets", "edge")
 
 
-def start_run(ticker: str, own: bool, engines: list[str] | None = None, debate: bool = True) -> dict:
+PLANS = ("claude", "chatgpt")
+
+
+def _settings() -> dict[str, str]:
+    """The desk's settings as a run would see them: the environment first, then ~/.hedge-desk/.env,
+    then ~/.hedge-fund/.env, blank values skipped. Read on every call, so an edit counts at once."""
+    from dotenv import dotenv_values
+    out = {k: v for k, v in os.environ.items() if v}
+    for path in (Path.home() / ".hedge-desk" / ".env", Path.home() / ".hedge-fund" / ".env"):
+        for k, v in dotenv_values(path).items():
+            if v and k not in out:
+                out[k] = v
+    return out
+
+
+def plan_info() -> dict:
+    """Which plan a new run uses by default, and the models each plan would call."""
+    s = _settings()
+    default = "chatgpt" if s.get("DESK_PLAN", "claude").strip().lower() in ("chatgpt", "codex", "openai") else "claude"
+    return {"default": default, "models": {
+        "claude": {"strong": s.get("DESK_MODEL", "claude-opus-5-5"), "fast": "claude-sonnet-5"},
+        "chatgpt": {"strong": s.get("DESK_CHATGPT_STRONG", "gpt-6-astra"), "fast": s.get("DESK_CHATGPT_FAST", "gpt-6-luna")}}}
+
+
+def start_run(ticker: str, own: bool, engines: list[str] | None = None, debate: bool = True,
+              plan: str | None = None) -> dict:
     engines = [e for e in ENGINES if e in (engines or ["quant", "vets"])] or ["quant", "vets"]
+    plan = plan if plan in PLANS else plan_info()["default"]
     debate = debate and len(engines) > 1
     if os.environ.get("DESK_REPLAY"):
         return replay_run(ticker, own)
@@ -101,13 +127,13 @@ def start_run(ticker: str, own: bool, engines: list[str] | None = None, debate: 
         cmd = [str(DESK_PYTHON), "-m", "desk", ticker, "--own", *([ticker] if own else []),
                "--horizon", "all", "--date", as_of, "--engines", ",".join(engines),
                *([] if debate else ["--no-debate"])]
-        env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+        env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8", "DESK_PLAN": plan}
         log = (run_dir / "desk.log").open("w", encoding="utf-8")
         proc = subprocess.Popen(cmd, cwd=DESK_DIR, env=env, stdout=log, stderr=subprocess.STDOUT,
                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         rid = f"{ticker}-{as_of}-{uuid.uuid4().hex[:8]}"   # seconds collide; two runs, one id
         RUNS[rid] = {"proc": proc, "ticker": ticker, "date": as_of, "own": own, "run_dir": run_dir,
-                     "started": time.time(), "engines": engines, "debate": debate}
+                     "started": time.time(), "engines": engines, "debate": debate, "plan": plan}
     threading.Thread(target=symbol.get, args=(ticker,), daemon=True).start()
     print(f"[desk] {' '.join(cmd)}")
     return {"id": rid, "ticker": ticker, "date": as_of}
@@ -204,7 +230,7 @@ def status(rid: str, since: int) -> dict:
            "exit": code, "elapsed": round(time.time() - run["started"], 1),
            "ticker": run["ticker"], "date": run["date"], "own": run["own"],
            "engines": run.get("engines") or ["quant", "vets"], "debate": run.get("debate", True),
-           "cancelled": bool(run.get("cancelled"))}
+           "plan": run.get("plan", "claude"), "cancelled": bool(run.get("cancelled"))}
     if code not in (None, 0):
         log = run["run_dir"] / "desk.log"
         out["log"] = "\n".join(log.read_text(encoding="utf-8", errors="replace").splitlines()[-20:]) if log.exists() else ""
@@ -213,7 +239,7 @@ def status(rid: str, since: int) -> dict:
 
 def live_runs() -> list[dict]:
     with LOCK:
-        return [{"id": rid, "ticker": r["ticker"], "date": r["date"], "own": r["own"],
+        return [{"id": rid, "ticker": r["ticker"], "date": r["date"], "own": r["own"], "plan": r.get("plan", "claude"),
                  "elapsed": round(time.time() - r["started"]), "exit": r["proc"].poll()}
                 for rid, r in RUNS.items()
                 if not r.get("cancelled") and (r["proc"].poll() is None or r["proc"].poll() != 0)]
@@ -253,7 +279,7 @@ class Handler(SimpleHTTPRequestHandler):
             if url.path == "/api/token":
                 return self._json({"token": TOKEN})
             if url.path == "/api/runs":
-                return self._json({"runs": runview.index(), "live": live_runs()})
+                return self._json({"runs": runview.index(), "live": live_runs(), "plan": plan_info()})
             if url.path == "/api/run":
                 return self._json(runview.build(validate.ticker(q.get("t")), validate.day(q.get("d"))))
             if url.path == "/api/profile":
@@ -319,7 +345,7 @@ class Handler(SimpleHTTPRequestHandler):
         if not DESK_PYTHON.exists():
             return self._json({"error": f"The desk's Python was not found at {DESK_PYTHON}."}, 500)
         return self._json(start_run(ticker, bool(body.get("own")), body.get("engines"),
-                                    body.get("debate", True)))
+                                    body.get("debate", True), body.get("plan")))
 
 
 def main() -> None:

@@ -446,6 +446,9 @@ def build(ticker: str, as_of: str) -> dict:
                         for k in HORIZON_ORDER if k in hz for c in (hz[k].get("corrections") or [])],
         "bars": [b for b in bars(ticker, as_of, run_dir) if b["d"] <= anchor_day],   # settled closes only
         "price_day": anchor_day if anchor_day != as_of else None,
+        # Which subscription answered. Runs from before the ChatGPT plan existed were all Claude.
+        "plan": bundle.get("plan") or {"name": "claude" if (bundle.get("costs") or {}).get("billing") == "max" else "api",
+                                       "models": [bundle.get("model")] if bundle.get("model") else []},
         "flags": run_flags(bundle, aihf, edge, engines),
         "history": history(ticker, as_of),
     }
@@ -471,6 +474,7 @@ def index() -> list[dict]:
                     "status": {k: (hz.get(k) or {}).get("outcome", {}).get("status") for k in HORIZON_ORDER if k in hz},
                     "generated_at": b.get("generated_at") or "",
                     "close": (b.get("ai_hedge_fund") or b.get("edge_desk") or {}).get("last_close"),
+                    "plan": (b.get("plan") or {}).get("name") or ("claude" if (b.get("costs") or {}).get("billing") == "max" else "api"),
                     "flags": [{"kind": f["kind"], "level": f["level"]} for f in
                               run_flags(b, b.get("ai_hedge_fund"), b.get("edge_desk"), engines)],
                     "ratings": {k: (hz.get(k) or {}).get("outcome", {}).get("rating") for k in HORIZON_ORDER if k in hz}})

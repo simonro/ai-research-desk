@@ -14,7 +14,13 @@ const $app = document.getElementById("app");
 const PHONE = () => innerWidth <= 700;
 const saved = (() => { try { return JSON.parse(localStorage.getItem("desk.form") || "{}"); } catch { return {}; } })();
 const S = { runs: [], live: [], run: null, profile: {}, liveState: null, poll: null, drawer: false,
-            own: false, engines: { quant: true, vets: true, edge: false, ...(saved.engines || {}) }, debate: saved.debate !== false };
+            own: false, engines: { quant: true, vets: true, edge: false, ...(saved.engines || {}) }, debate: saved.debate !== false,
+            plan: null, planInfo: null };
+// Which subscription answers the model calls. The form defaults to the settings (DESK_PLAN) and
+// can switch one run at a time; every run records the plan it used.
+const PLAN_NAME = { claude: "Claude", chatgpt: "ChatGPT", api: "API key" };
+const planNow = () => S.plan || S.planInfo?.default || "claude";
+const planModels = p => { const m = S.planInfo?.models?.[p]; return m ? `${m.strong} and ${m.fast}` : ""; };
 
 /* ------------------------------------------------------------------ helpers */
 const esc = s => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -150,7 +156,7 @@ function sidebar(activeKey) {
   const items = [
     ...live.map(l => ({ key: "live:" + l.id, t: l.ticker, sub: `Running · ${l.own ? "owned" : "new position"}`, live: true, href: { live: l.id } })),
     ...S.runs.map(r => ({ key: `${r.ticker}:${r.date}`, t: r.ticker,
-      sub: `${fmtDate(r.date, false)} · ${r.mode === "reports" ? "reports only" : r.owns ? "owned" : "new position"}`, dots: runDots(r), href: { t: r.ticker, d: r.date } })),
+      sub: `${fmtDate(r.date, false)} · ${r.mode === "reports" ? "reports only" : r.owns ? "owned" : "new position"}${r.plan === "chatgpt" ? " · ChatGPT" : ""}`, dots: runDots(r), href: { t: r.ticker, d: r.date } })),
   ];
   const n = ORDER.filter(e => S.engines[e]).length;
   const form = `<form class="newrun" id="newrun">
@@ -158,6 +164,9 @@ function sidebar(activeKey) {
       <input id="tk" class="tk-in" placeholder="TICKER" autocomplete="off" spellcheck="false" maxlength="6">
       <div class="seg" role="group" aria-label="Position">
         <button type="button" data-own="0" class="${S.own ? "" : "on"}">New position</button><button type="button" data-own="1" class="${S.own ? "on" : ""}">Owned</button></div>
+      <div class="seg plan-seg" role="group" aria-label="AI plan">
+        ${["claude", "chatgpt"].map(p => `<button type="button" data-plan="${p}" class="${planNow() === p ? "on" : ""}" title="${esc(planModels(p))}">${PLAN_NAME[p]}</button>`).join("")}</div>
+      <p class="plan-hint">AI plan: ${PLAN_NAME[planNow()]}${planModels(planNow()) ? ` · ${esc(planModels(planNow()))}` : ""}${S.plan && S.plan !== S.planInfo?.default ? " (this run only)" : ""}</p>
       <div class="pick" role="group" aria-label="Teams">${ORDER.map(e => `<label class="${TEAMS[e].cls}"><input type="checkbox" data-engine="${e}" ${S.engines[e] ? "checked" : ""}><span>${TEAMS[e].name}<small>${TEAMS[e].about}</small></span></label>`).join("")}</div>
       <label class="deb ${n < 2 ? "off" : ""}"><input type="checkbox" data-debate ${S.debate && n > 1 ? "checked" : ""} ${n < 2 ? "disabled" : ""}>
         <span>Debate the ratings<small>${n < 2 ? "Needs at least two teams" : "Compare by horizon, debate, write a memo"}</small></span></label>
@@ -538,7 +547,8 @@ function firstScreen(run, key) {
       <div class="fs-pills"><span class="fs-pill ${run.owns ? "own" : ""}">${run.owns ? "Owned" : "New position"}</span>${run.engines.map(t => `<span class="fs-chip ${TEAMS[t].cls}">${TEAMS[t].name}</span>`).join("")}</div></div>
       <div class="fs-meta"><div class="fs-px">${money(run.close)} <span>settled close ${fmtDate(run.price_day || run.date)}</span></div>
         ${edgeOff ? `<div class="fs-warnline">Edge Desk priced from ${fmtDate(e.price_day)} at ${money(e.close)}</div>` : ""}
-        <div>Run ${fmtDate(run.date)}${run.generated_at ? ", " + new Date(run.generated_at).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) : ""}</div></div></div>
+        <div>Run ${fmtDate(run.date)}${run.generated_at ? ", " + new Date(run.generated_at).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) : ""}</div>
+        ${run.plan ? `<div class="fs-plan">${PLAN_NAME[run.plan.name] || run.plan.name} plan${run.plan.models?.length ? ` · ${esc(run.plan.models.filter(Boolean).join(", "))}` : ""}</div>` : ""}</div></div>
     ${flagList(runFlags(run))}
     <div class="fs-hz">${run.horizons.filter(x => x.key !== "as_they_ran").map(x => horizonCard(run, x)).join("")}</div>
     ${h && h.memo.reasons.length ? `<h4 class="fs-h">What carried it <span class="fs-tabs">${tabs}</span></h4>
@@ -820,7 +830,7 @@ async function pollLive() {
   const L = S.liveState; if (!L) return;
   try {
     const r = await api(`/api/status?id=${encodeURIComponent(L.id)}&from=${L.from}`);
-    Object.assign(L, { elapsed: r.elapsed, running: r.running, exit: r.exit, log: r.log || "", ticker: r.ticker, date: r.date, own: r.own, cancelled: !!r.cancelled });
+    Object.assign(L, { elapsed: r.elapsed, running: r.running, exit: r.exit, log: r.log || "", ticker: r.ticker, date: r.date, own: r.own, plan: r.plan, cancelled: !!r.cancelled });
     if (!L.events.length) { L.engines = r.engines || L.engines; L.debate = r.debate !== false; }
     r.events.forEach(e => { applyEvent(L, e); L.from = e.seq; });
     loadProfile(L.ticker);
@@ -884,7 +894,7 @@ function livePage(L) {
   const errorBanner = L.error ? `<div class="banner"><span class="mk">!</span><div><b>Lost track of this run</b><span>${esc(L.error)}</span></div></div>` : "";
   const feed = [...L.events].filter(e => e.type === "agent_done").reverse();
   const stillWorking = teams.filter(e => !L.team[e].finished).map(e => "the " + TEAMS[e].name);
-  const now = `<section aria-label="Now"><div class="eyebrow"><b>${allRated ? (teams.length > 1 ? "Every team has rated" : "The team has rated") : "Now"}</b><span>${allRated ? (L.debate ? "Their ratings are now compared, one horizon at a time" : "Saving the reports")
+  const now = `${L.plan ? `<p class="plan-live">Running on the <b>${PLAN_NAME[L.plan] || L.plan} plan</b>${planModels(L.plan) ? ` (${esc(planModels(L.plan))})` : ""}</p>` : ""}<section aria-label="Now"><div class="eyebrow"><b>${allRated ? (teams.length > 1 ? "Every team has rated" : "The team has rated") : "Now"}</b><span>${allRated ? (L.debate ? "Their ratings are now compared, one horizon at a time" : "Saving the reports")
       : failed ? `Stopped at ${clock}` : finishedTeams.length ? `${cap(list(finishedTeams.map(e => "the " + TEAMS[e].name)))} ${finishedTeams.length > 1 ? "have" : "has"} rated; ${list(stillWorking)} ${stillWorking.length > 1 ? "are" : "is"} still working` : teams.length > 1 ? "Every team is working" : "Working"}</span></div>
     <div class="now" style="--n:${teams.length}">${teams.map(e => liveTeamCol(L, e)).join("")}</div></section>`;
   let convergence = "";
@@ -989,7 +999,7 @@ function render() {
 
 /* ------------------------------------------------------------------ routing and events */
 async function loadRuns() {
-  try { const r = await api("/api/runs"); S.runs = r.runs; S.live = r.live; } catch (e) { S.runs = S.runs || []; }
+  try { const r = await api("/api/runs"); S.runs = r.runs; S.live = r.live; S.planInfo = r.plan || S.planInfo; } catch (e) { S.runs = S.runs || []; }
 }
 async function route() {
   const q = Q();
@@ -1013,7 +1023,7 @@ async function route() {
   render();
   if (!q.doc && !location.hash) scrollTo(0, 0);
 }
-const startRun = (ticker, own, engines, debate) => api("/api/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ticker, own, engines, debate }) });
+const startRun = (ticker, own, engines, debate, plan = planNow()) => api("/api/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ticker, own, engines, debate, plan }) });
 
 document.addEventListener("click", async e => {
   const nav = e.target.closest("a[data-nav]");
@@ -1040,6 +1050,8 @@ document.addEventListener("click", async e => {
   if (e.target.closest("[data-close-drawer]")) { S.drawer = false; return render(); }
   const seg = e.target.closest("[data-own]");
   if (seg) { S.own = seg.dataset.own === "1"; document.querySelectorAll("[data-own]").forEach(b => b.classList.toggle("on", b === seg)); return; }
+  const planBtn = e.target.closest("[data-plan]");
+  if (planBtn) { S.plan = planBtn.dataset.plan; return render(); }
   if (e.target.closest("[data-more]")) { const d = document.getElementById("symdesc"); d.classList.toggle("open"); e.target.textContent = d.classList.contains("open") ? "Less" : "More"; return; }
   const pdfLink = e.target.closest("[data-pdf]");
   if (pdfLink) { const n = document.getElementById("pdfnote"); if (n) n.textContent = "Preparing the PDF. The download starts by itself in a few seconds."; return; }
@@ -1054,7 +1066,7 @@ document.addEventListener("click", async e => {
   }
   if (e.target.closest("[data-rerun]")) {
     const L = S.liveState;
-    try { const r = await startRun(L.ticker, L.own, L.engines, L.debate); await loadRuns(); S.liveState = null; go({ live: r.id }); } catch (err) { alert(err.message); }
+    try { const r = await startRun(L.ticker, L.own, L.engines, L.debate, L.plan || planNow()); await loadRuns(); S.liveState = null; go({ live: r.id }); } catch (err) { alert(err.message); }
   }
 });
 document.addEventListener("change", e => {

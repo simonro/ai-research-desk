@@ -195,3 +195,26 @@ def test_simultaneous_launches_start_one_process(tmp_path, monkeypatch):
     assert len(server.RUNS) == 1
     assert len({r["id"] for r in results}) == 1
     assert sum(1 for r in results if r.get("already")) == 7
+
+
+def test_a_run_carries_the_plan_picked_in_the_form(tmp_path, monkeypatch):
+    """The AI plan (2026-10-05): the form's Claude or ChatGPT choice reaches the desk as DESK_PLAN,
+    an unknown value falls back to the settings, and the run remembers its plan."""
+    seen = []
+
+    class Proc:
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(server, "MEMOS", tmp_path)
+    monkeypatch.setattr(server.subprocess, "Popen", lambda cmd, **kw: seen.append(kw["env"]["DESK_PLAN"]) or Proc())
+    monkeypatch.setattr(server.symbol, "get", lambda *a, **k: None)
+    monkeypatch.setattr(server, "plan_info", lambda: {"default": "claude", "models": {}})
+    monkeypatch.delenv("DESK_REPLAY", raising=False)
+    server.RUNS.clear()
+    rid = server.start_run("MSFT", False, ["quant", "vets"], True, "chatgpt")["id"]
+    assert seen == ["chatgpt"] and server.status(rid, 0)["plan"] == "chatgpt"
+    server.RUNS.clear()
+    server.start_run("NVDA", False, ["quant", "vets"], True, "gpt-9000")
+    assert seen[-1] == "claude"
+    server.RUNS.clear()
