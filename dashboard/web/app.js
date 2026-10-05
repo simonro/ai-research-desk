@@ -431,7 +431,7 @@ function reportsSection(run) {
   return `<section class="sec" aria-label="Full reports">
     <div class="eyebrow"><b>Full reports</b><span>${run.mode === "reports" ? "Each team's report as its own tool wrote it" : "The memo that combines them, and each team's report as its own tool wrote it"}</span></div>
     <div class="docs">${reportDocs(run).map(([k, n, c, m]) => `<a class="doc" href="${link(k)}" data-nav><i style="background:${c}"></i><span><span class="n">${n}</span><span class="m">${m}</span></span><span class="go2">Read</span></a>`).join("")}</div>
-    <p class="runfoot">Run ${fmtDate(run.date)}${run.generated_at ? `, finished ${new Date(run.generated_at).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}` : ""}${run.billing === "max" ? ` · Max plan, nothing billed${run.notional ? ` (API equivalent $${run.notional.toFixed(2)})` : ""}` : run.costs != null ? ` · API cost $${run.costs.toFixed(2)}` : ""}${run.seconds ? ` · ${dur(run.seconds)}` : ""}</p>
+    <p class="runfoot">Run ${fmtDate(run.date)}${run.generated_at ? `, finished ${new Date(run.generated_at).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}` : ""}${run.billing === "max" ? ` · Claude plan, nothing billed${run.notional ? ` (API equivalent $${run.notional.toFixed(2)})` : ""}` : run.billing === "chatgpt" ? " · ChatGPT plan, nothing billed" : run.costs != null ? ` · API cost $${run.costs.toFixed(2)}` : ""}${run.seconds ? ` · ${dur(run.seconds)}` : ""}</p>
   </section>`;
 }
 
