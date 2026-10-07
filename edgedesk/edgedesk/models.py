@@ -46,7 +46,7 @@ class FinancialMetrics(BaseModel):
     period: str
     currency: str | None = None
 
-    # Point-in-time filing metadata (Eastern Time) — when this data became
+    # Point-in-time filing metadata (Eastern Time) - when this data became
     # public. Null on rows without a dated SEC filing (deep-history archive).
     filing_date: str | None = None
     filing_datetime: str | None = None
