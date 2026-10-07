@@ -88,8 +88,13 @@ def main() -> None:
     ticker, as_of, out = sys.argv[1].upper(), sys.argv[2], Path(sys.argv[3])
     events = EventLog.from_env()
     started = time.time()
+    # The plan the desk chose for this run. Edge's own settings win for everything else, but a
+    # DESK_PLAN or EDGE_DESK_PLAN in its .env must not quietly run a ChatGPT run on Claude.
+    chosen = os.environ.get("DESK_PLAN")
     edge_settings_win()
     load_env()
+    if chosen:
+        os.environ["DESK_PLAN"] = os.environ["EDGE_DESK_PLAN"] = chosen
     for step, name, stage in STAGES:
         events.emit("agent_queued", engine="edge", who=name, role=stage)
 

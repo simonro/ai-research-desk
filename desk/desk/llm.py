@@ -20,12 +20,16 @@ FALLBACK_BETA = "server-side-fallback-2026-07-01"
 # user turn, after the cached reports. The output schema is part of the prefix
 # too, so each call type (horizon rating, debate turn, memo) writes the cache
 # once per run and every later call of that type reads it.
-DESK_SYSTEM = """You work on an investment desk that combines two independent research desks,
-TradingAgents and ai-hedge-fund, for a swing-to-long-term investor (weeks to years) who acts
-on the outcome with real money. Use only the material provided: the two desk reports, any
-debate transcript, and computed price anchors. Do not use outside knowledge and do not
-invent numbers. Write plainly, with no em dashes or en dashes. Respond with JSON only, in
-the schema requested."""
+# Count-neutral on purpose: a run selects two or three teams, and naming them here per run
+# would make the cached prefix differ between runs for no gain.
+DESK_SYSTEM = """You work on an investment desk that combines the reports of the research teams
+selected for this run (TradingAgents, ai-hedge-fund and Edge Desk; a run may use any two or all
+three) for a swing-to-long-term investor (weeks to years) who acts on the outcome with real
+money. The teams share models and some data, so their agreement is not independent
+confirmation. Use only the material provided: the reports included below, any debate
+transcript, and the shared computed data. Do not use outside knowledge and do not invent
+numbers. Write plainly, with no em dashes or en dashes. Respond with JSON only, in the schema
+requested."""
 
 
 def cached_text(text: str) -> dict:

@@ -42,8 +42,11 @@ def main() -> int:
                         help="comma list of quant (TradingAgents), vets (ai-hedge-fund), edge (Edge Desk)")
     parser.add_argument("--no-debate", action="store_true",
                         help="run the engines and keep their reports: no horizon ratings, debate or memo")
+    parser.add_argument("--run-id", default=None, help=argparse.SUPPRESS)   # the dashboard names its runs
     args = parser.parse_args()
 
+    if args.run_id and not __import__("re").fullmatch(r"\d{6}-[0-9a-f]{6}", args.run_id):
+        raise SystemExit("--run-id must look like 153012-a1b2c3")
     for env_file in KEY_ENV_FILES:
         load_dotenv(env_file, override=False)
 
@@ -55,6 +58,8 @@ def main() -> int:
         args.no_debate = True                       # one opinion has nobody to debate
     tickers = [t.strip().upper() for raw in args.tickers for t in raw.replace(",", " ").split()]
     owned = _owned(tickers, args.own)
+    if len(tickers) > 1:
+        args.run_id = None                          # one id names one run
 
     failures = 0
     for ticker in tickers:
@@ -64,6 +69,13 @@ def main() -> int:
             failures += 1
             print(f"\n{ticker}: desk run failed. {exc}", file=sys.stderr)
     return 1 if failures else 0
+
+
+def new_run_id() -> str:
+    """HHMMSS plus six random hex digits: sorts by time, and two runs in one second still differ."""
+    import secrets
+    from datetime import datetime
+    return f"{datetime.now():%H%M%S}-{secrets.token_hex(3)}"
 
 
 def _owned(tickers: list[str], own_flag: list[str] | None) -> dict[str, bool]:
@@ -90,7 +102,9 @@ def run_one(ticker: str, owns: bool, args) -> None:
     session = price_session(args.date)
     print(f"  Priced from the {session} settled close" + ("" if session == args.date else
                                                              " (today's session has not settled)"))
-    run_dir = MEMOS_DIR / "runs" / f"{ticker}-{args.date}"
+    # Every run keeps its own folder; TICKER-DATE.json is only the pointer to the day's latest.
+    run_id = getattr(args, "run_id", None) or new_run_id()
+    run_dir = MEMOS_DIR / "runs" / f"{ticker}-{args.date}-{run_id}"
     run_dir.mkdir(parents=True, exist_ok=True)
     debate = not args.no_debate
     horizon_keys = _HORIZON_CHOICES[args.horizon] if debate else []
@@ -132,7 +146,7 @@ def run_one(ticker: str, owns: bool, args) -> None:
     ta, aihf, edge = reports.get("A"), reports.get("B"), reports.get("C")
     desk_cost = llm.cost()
     bundle = {
-        "ticker": ticker, "date": args.date, "generated_at": stamp(), "model": MODEL,
+        "ticker": ticker, "date": args.date, "run_id": run_id, "generated_at": stamp(), "model": MODEL,
         "mandate": args.mandate, "owns": owns, "horizons": horizons, "native": native,
         "price_session": session, "price_check": checked, "quality": quality,
         # Which subscription and models answered: a run on another plan is a different desk.
@@ -148,7 +162,7 @@ def run_one(ticker: str, owns: bool, args) -> None:
                   "notional": round(sum(x for x in (notional(ta), notional(aihf), llm.notional()) if x), 4),
                   "desk_calls": llm.calls},
     }
-    paths = write_all(bundle, MEMOS_DIR, to_vault=not args.no_vault and debate)
+    paths = write_all(bundle, MEMOS_DIR, to_vault=not args.no_vault and debate, run_dir=run_dir)
     events.emit("run_finished", ticker=ticker, cost=bundle["costs"]["total"],
                 memo=str(paths["markdown"]), json=str(paths["json"]),
                 text=f"Memo saved: {paths['markdown'].name}" if debate else "Reports saved")

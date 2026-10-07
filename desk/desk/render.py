@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 from datetime import datetime
@@ -165,7 +166,7 @@ def horizon_section(key: str, h: dict) -> list[str]:
     out += ["### Why", *[f"- {x}" for x in memo["key_reasons"]], "",
             "### Risks", *[f"- {x}" for x in memo["key_risks"]], "",
             "### Price levels", "", "| Level | Price | Why |", "|---|---|---|"]
-    out += [f"| {name} | {memo['levels'][k]['price']} | {_one_line(memo['levels'][k]['reason'])} |"
+    out += [f"| {name} | {_level_price(memo['levels'][k])} | {_one_line(_level_why(memo['levels'][k]))} |"
             for k, name in _LEVEL_NAMES]
     out += ["", "### What to watch", *[f"- {x}" for x in memo["what_to_watch"]], ""]
     return out
@@ -185,19 +186,28 @@ def vault_note(bundle: dict, memo_md: str) -> str:
         front.append(f"rating_{key}: {h['outcome']['rating'] or ('Withheld' if h['outcome'].get('status') == 'withheld' else 'No consensus')}")
     levels = lead["memo"].get("levels") or {}
     if levels:
-        front += [f"target: \"{levels['first_target']['price']}\"", f"risk: \"{levels['stop']['price']}\""]
+        front += [f"target: \"{_level_price(levels['first_target'])}\"", f"risk: \"{_level_price(levels['stop'])}\""]
     front += ["---", ""]
     return "\n".join(front) + memo_md
 
 
-def write_all(bundle: dict, memos_dir: Path, to_vault: bool, say=print) -> dict:
+def write_all(bundle: dict, memos_dir: Path, to_vault: bool, say=print, run_dir: Path | None = None) -> dict:
+    """The run's own copy (run_dir/memo.json and memo.md, never overwritten) and the day's pointer
+    (memos/TICKER-DATE.json and .md, the latest finished run of that day). The pointer is replaced
+    only once the run's copy is written, each file in one step, so a failed rerun leaves the
+    earlier run as the day's result."""
     stem = f"{bundle['ticker']}-{bundle['date']}"
     memos_dir.mkdir(parents=True, exist_ok=True)
     md_path, json_path = memos_dir / f"{stem}.md", memos_dir / f"{stem}.json"
     bundle["files"] = {"markdown": str(md_path), "json": str(json_path)}
+    if run_dir is not None:
+        bundle["files"]["run"] = str(run_dir / "memo.json")
     memo_md = markdown(bundle)
-    md_path.write_text(memo_md, encoding="utf-8")
-    json_path.write_text(json.dumps(bundle, indent=2), encoding="utf-8")
+    if run_dir is not None:
+        _replace(run_dir / "memo.md", memo_md)
+        _replace(run_dir / "memo.json", json.dumps(bundle, indent=2))
+    _replace(md_path, memo_md)
+    _replace(json_path, json.dumps(bundle, indent=2))
     paths = {"markdown": md_path, "json": json_path}
     if to_vault and VAULT_MEMOS_DIR:
         VAULT_MEMOS_DIR.mkdir(parents=True, exist_ok=True)
@@ -206,6 +216,12 @@ def write_all(bundle: dict, memos_dir: Path, to_vault: bool, say=print) -> dict:
         paths["vault"] = note
         _reindex_vault(say)
     return paths
+
+
+def _replace(path: Path, text: str) -> None:
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
 
 
 def ta_summary(ta: dict) -> str:
@@ -222,6 +238,19 @@ def _reindex_vault(say) -> None:
             subprocess.run([str(QMD), step], capture_output=True, timeout=300, check=False)
     except (OSError, subprocess.SubprocessError) as exc:
         say(f"  (vault search re-index skipped: {exc})")
+
+
+def _level_price(lv: dict) -> str:
+    """Checked levels were computed in code; older bundles carry the model's own text, marked."""
+    if lv.get("status") == "withheld":
+        return "Withheld"
+    return lv["price"] if lv.get("status") == "checked" else f"{lv['price']} (unchecked)"
+
+
+def _level_why(lv: dict) -> str:
+    if lv.get("status") == "withheld":
+        return f"{lv.get('why')}. {lv.get('reason') or ''}".strip()
+    return f"{lv['reason']} ({lv['how']})" if lv.get("how") else lv["reason"]
 
 
 def _one_line(value: str, limit: int = 260) -> str:

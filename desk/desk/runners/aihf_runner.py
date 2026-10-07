@@ -40,6 +40,11 @@ class MaxLLM:
     """ai-hedge-fund's LLMClient protocol (complete(system, user) -> str) on the Max plan."""
 
     def __init__(self, model: str, effort: str | None = "medium") -> None:
+        # The model that will answer: ai-hedge-fund keys its prompt cache on this name, so on the
+        # ChatGPT plan a Claude id here would hand back Claude's cached answers as ChatGPT's.
+        if maxplan.plan() == "chatgpt":
+            from desk import chatgpt
+            model = chatgpt.model_for(model)
         self.model = model
         self.effort = effort
 

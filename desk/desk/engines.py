@@ -1,4 +1,8 @@
-"""Run both research desks for a symbol, in parallel, each in its own virtualenv."""
+"""Run the selected research teams for a symbol, in parallel, each in its own virtualenv.
+
+A team report saved earlier the same day is reused only when it was produced from the same
+inputs (desk/provenance.py): same plan, price session, model settings, fund and code. Anything
+else, or a report that records no inputs, runs the team again."""
 
 from __future__ import annotations
 
@@ -10,11 +14,12 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from desk import DeskError
+from desk import DeskError, maxplan, provenance
 from desk.config import (AIHF_DIR, AIHF_PYTHON, AIHF_TIMEOUT_SECONDS, EDGE_DIR, EDGE_PYTHON,
-                         EDGE_TIMEOUT_SECONDS, RUNNERS_DIR, TA_DIR, TA_LOGS, TA_PYTHON,
+                         EDGE_TIMEOUT_SECONDS, RUNNERS_DIR, TA_DIR, TA_PYTHON,
                          TA_REPORT_FILES, TA_TIMEOUT_SECONDS)
 from desk.events import EventLog
+from desk.procs import kill_tree, tree_kwargs
 from desk.ratings import normalize
 
 _RATING_RE = re.compile(r"\*\*Rating\*\*:\s*\**\s*([A-Za-z]+)")
@@ -24,26 +29,81 @@ ENGINES = ("quant", "vets", "edge")            # the names the CLI and the dashb
 CODE = {"quant": "A", "vets": "B", "edge": "C"}
 
 
+_RUN_DIR = re.compile(r"^(?P<day>.+-\d{4}-\d{2}-\d{2})(?:-\d{6}-[0-9a-f]{6})?$")
+
+
+def current_plan() -> str:
+    return maxplan.plan() if maxplan.enabled() else "api"
+
+
 def run_selected(engines: list[str], ticker: str, as_of: str, mandate: str, run_dir: Path,
-                 fresh: bool, say=print, events: EventLog | None = None) -> dict[str, dict]:
-    """Run the chosen engines in parallel. Returns {desk code: payload}, in A, B, C order."""
+                 fresh: bool, say=print, events: EventLog | None = None,
+                 plan: str | None = None) -> dict[str, dict]:
+    """Run the chosen engines in parallel. Returns {desk code: payload}, in A, B, C order.
+    `as_of` is the settled session every team prices from."""
     run_dir.mkdir(parents=True, exist_ok=True)
     events = events or EventLog(None)
-    jobs = {"quant": lambda: _tradingagents(ticker, as_of, run_dir, fresh, say, events),
-            "vets": lambda: _ai_hedge_fund(ticker, as_of, mandate, run_dir, fresh, say, events),
-            "edge": lambda: _edge_desk(ticker, as_of, run_dir, fresh, say, events)}
+    plan = plan or current_plan()
+    wanted = {e: provenance.expected(e, plan, as_of, mandate if e == "vets" else None) for e in ENGINES}
+    ctx = {"run_dir": run_dir, "fresh": fresh, "say": say, "events": events, "plan": plan}
+    jobs = {"quant": lambda: _tradingagents(ticker, as_of, wanted["quant"], ctx),
+            "vets": lambda: _ai_hedge_fund(ticker, as_of, mandate, wanted["vets"], ctx),
+            "edge": lambda: _edge_desk(ticker, as_of, wanted["edge"], ctx)}
     chosen = [e for e in ENGINES if e in engines]
     with ThreadPoolExecutor(max_workers=len(chosen) or 1) as pool:
         futures = {e: pool.submit(jobs[e]) for e in chosen}
         return {CODE[e]: f.result() for e, f in futures.items()}
 
 
-def _edge_desk(ticker: str, as_of: str, run_dir: Path, fresh: bool, say, events) -> dict:
+def reusable(run_dir: Path, name: str, wanted: dict, label: str, say=print,
+             allow_no_rating: bool = False) -> dict | None:
+    """The newest report `name` saved today, in any run folder of this symbol and day, whose
+    inputs equal `wanted`. It is copied into this run's folder, marked with where it came from."""
+    m = _RUN_DIR.match(run_dir.name)
+    day = m.group("day") if m else run_dir.name
+    folders = []
+    for f in run_dir.parent.glob(f"{day}*"):
+        fm = _RUN_DIR.match(f.name)
+        if f != run_dir and fm and fm.group("day") == day and (f / name).exists():
+            folders.append(f)
+    refused = None
+    for folder in sorted(folders, key=lambda f: (f / name).stat().st_mtime, reverse=True):
+        try:
+            saved = json.loads((folder / name).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        why = provenance.differs(saved.get("inputs"), wanted)
+        if why:
+            refused = refused or f"{folder.name}: {why}"
+            continue
+        try:
+            payload = _load(folder / name, allow_no_rating)
+        except DeskError:
+            continue
+        payload = {**payload, "reused": True, "reused_from": folder.name}
+        (run_dir / name).write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        say(f"  {label}: reusing the report from {folder.name} (same inputs)")
+        return payload
+    if refused:
+        say(f"  {label}: not reusing today's earlier report ({refused}); running it again")
+    return None
+
+
+def _stamp(out: Path, payload: dict, wanted: dict) -> dict:
+    """Record what produced a fresh report, in the file and in the payload."""
+    saved = json.loads(out.read_text(encoding="utf-8"))
+    saved["inputs"] = wanted
+    out.write_text(json.dumps(saved, indent=2), encoding="utf-8")
+    return {**payload, "inputs": wanted}
+
+
+def _edge_desk(ticker: str, as_of: str, wanted: dict, ctx: dict) -> dict:
+    run_dir, say, events = ctx["run_dir"], ctx["say"], ctx["events"]
     out = run_dir / "edge-desk.json"
-    if out.exists() and not fresh:
-        say(f"  Edge Desk: reusing this run's saved report ({out.name})")
-        payload = {**_load(out, allow_no_rating=True), "reused": True}
-        events.emit("engine_reused", engine="edge", rating=payload["rating"], text="Reusing today's report")
+    payload = None if ctx["fresh"] else reusable(run_dir, out.name, wanted, "Edge Desk", say, allow_no_rating=True)
+    if payload:
+        events.emit("engine_reused", engine="edge", rating=payload["rating"],
+                    text=f"Reusing the report from {payload['reused_from']} (same inputs)")
         return payload
     if not EDGE_PYTHON.exists():
         raise DeskError(f"Edge Desk was not found at {EDGE_DIR} (set EDGE_DESK_DIR if it moved)")
@@ -51,52 +111,49 @@ def _edge_desk(ticker: str, as_of: str, run_dir: Path, fresh: bool, say, events)
     events.emit("engine_started", engine="edge", text="Edge Desk is building its evidence package")
     payload = _run(EDGE_PYTHON, EDGE_DIR, [RUNNERS_DIR / "edge_runner.py", ticker, as_of, out],
                    out, run_dir / "edge-desk.log", EDGE_TIMEOUT_SECONDS, "Edge Desk", say, events,
-                   allow_no_rating=True)
+                   allow_no_rating=True, plan=ctx["plan"])
+    payload = _stamp(out, payload, wanted)
     events.emit("engine_done", engine="edge", rating=payload["rating"],
                 text=f"Edge Desk: {payload['rating'] or 'rating withheld'}")
     return payload
 
 
-def _tradingagents(ticker: str, as_of: str, run_dir: Path, fresh: bool, say, events) -> dict:
+def _tradingagents(ticker: str, as_of: str, wanted: dict, ctx: dict) -> dict:
+    # A run of TradingAgents' own CLI is no longer picked up: it records neither the plan nor the
+    # models it ran on, so it could stand in for a run on different inputs (load_cli_reports stays
+    # for reading one by hand).
+    run_dir, say, events = ctx["run_dir"], ctx["say"], ctx["events"]
     out = run_dir / "tradingagents.json"
-    if not fresh:
-        reused = None
-        if out.exists():
-            say(f"  TradingAgents: reusing this run's saved report ({out.name})")
-            reused = {**_load(out), "reused": True}
-        else:
-            cli_reports = TA_LOGS / ticker / as_of / "reports"
-            if (cli_reports / "final_trade_decision.md").exists():
-                say(f"  TradingAgents: reusing today's CLI run ({cli_reports})")
-                out.write_text(json.dumps(load_cli_reports(ticker, as_of, cli_reports), indent=2),
-                               encoding="utf-8")
-                reused = {**_load(out), "reused": True}
-        if reused:
-            events.emit("engine_reused", engine="tape", rating=reused["rating"],
-                        text="Reusing today's report")
-            return reused
+    reused = None if ctx["fresh"] else reusable(run_dir, out.name, wanted, "TradingAgents", say)
+    if reused:
+        events.emit("engine_reused", engine="tape", rating=reused["rating"],
+                    text=f"Reusing the report from {reused['reused_from']} (same inputs)")
+        return reused
     say("  TradingAgents: running (about 8 minutes)...")
     events.emit("engine_started", engine="tape", text="The quant desk is working the tape")
     payload = _run(TA_PYTHON, TA_DIR, [RUNNERS_DIR / "ta_runner.py", ticker, as_of, out],
-                   out, run_dir / "tradingagents.log", TA_TIMEOUT_SECONDS, "TradingAgents", say, events)
+                   out, run_dir / "tradingagents.log", TA_TIMEOUT_SECONDS, "TradingAgents", say, events,
+                   plan=ctx["plan"])
+    payload = _stamp(out, payload, wanted)
     events.emit("engine_done", engine="tape", rating=payload["rating"],
                 text=f"Portfolio Manager: {payload['rating']}")
     return payload
 
 
-def _ai_hedge_fund(ticker: str, as_of: str, mandate: str, run_dir: Path, fresh: bool,
-                   say, events) -> dict:
+def _ai_hedge_fund(ticker: str, as_of: str, mandate: str, wanted: dict, ctx: dict) -> dict:
+    run_dir, say, events = ctx["run_dir"], ctx["say"], ctx["events"]
     out = run_dir / "ai-hedge-fund.json"
-    if out.exists() and not fresh:
-        say(f"  ai-hedge-fund: reusing this run's saved report ({out.name})")
-        payload = {**_load(out), "reused": True}
+    payload = None if ctx["fresh"] else reusable(run_dir, out.name, wanted, "ai-hedge-fund", say)
+    if payload:
         events.emit("engine_reused", engine="value", rating=payload["rating"],
-                    text="Reusing today's report")
+                    text=f"Reusing the report from {payload['reused_from']} (same inputs)")
         return payload
     say(f"  ai-hedge-fund: running fund '{mandate}' (about 1 minute)...")
     events.emit("engine_started", engine="value", text="The veterans are reading the filings")
     payload = _run(AIHF_PYTHON, AIHF_DIR, [RUNNERS_DIR / "aihf_runner.py", ticker, as_of, mandate, out],
-                   out, run_dir / "ai-hedge-fund.log", AIHF_TIMEOUT_SECONDS, "ai-hedge-fund", say, events)
+                   out, run_dir / "ai-hedge-fund.log", AIHF_TIMEOUT_SECONDS, "ai-hedge-fund", say, events,
+                   plan=ctx["plan"])
+    payload = _stamp(out, payload, wanted)
     events.emit("engine_done", engine="value", rating=payload["rating"],
                 text=f"Research Manager: {payload['rating']}")
     return payload
@@ -114,14 +171,23 @@ def load_cli_reports(ticker: str, as_of: str, reports_dir: Path) -> dict:
 
 
 def _run(python: Path, cwd: Path, args: list, out: Path, log: Path, timeout: int,
-         name: str, say, events: EventLog | None = None, allow_no_rating: bool = False) -> dict:
+         name: str, say, events: EventLog | None = None, allow_no_rating: bool = False,
+         plan: str | None = None) -> dict:
     started = time.time()
+    if out.exists():
+        out.unlink()                 # a stale file must not pass for this run's output
     env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8", **(events.env if events else {})}
+    if plan in ("claude", "chatgpt"):
+        env["DESK_PLAN"] = plan      # stated, so no team's own settings can pick another plan
     with open(log, "w", encoding="utf-8") as log_file:
+        # Its own process tree, so a timeout stops the model calls under the runner too;
+        # subprocess.run's timeout kills only the runner and leaves them spending the plan.
+        proc = subprocess.Popen([str(python), *map(str, args)], cwd=cwd, env=env,
+                                stdout=log_file, stderr=subprocess.STDOUT, **tree_kwargs())
         try:
-            proc = subprocess.run([str(python), *map(str, args)], cwd=cwd, env=env,
-                                  stdout=log_file, stderr=subprocess.STDOUT, timeout=timeout)
+            proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired as exc:
+            kill_tree(proc)
             raise DeskError(f"{name} timed out after {timeout // 60} minutes (log: {log})") from exc
     if proc.returncode != 0 or not out.exists():
         tail = "\n".join(log.read_text(encoding="utf-8", errors="replace").splitlines()[-15:])

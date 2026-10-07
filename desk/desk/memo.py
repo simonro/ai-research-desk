@@ -9,7 +9,8 @@ measured that, and the teams share models and some data, so their agreement is n
 confirmation. The field is still called `conviction` in saved bundles; before 2026-09-24 it said
 High and Medium, which read as a measured confidence.
     action                the rating translated for the investor's position (desk/horizons.py)
-The model writes the prose, the action note, and turns computed data into price levels.
+The model writes the prose and the action note. For price levels it only picks which computed
+basis fits each level (desk/levels.py); code computes the number or withholds the level.
 The investor's position is shown only here, after the analysis is done.
 """
 
@@ -19,6 +20,7 @@ from desk.debate import DESKS, DebateResult, transcript
 from desk.views import VIEWS
 from desk.config import CALLS
 from desk.llm import DeskLLM, cached_text, text
+from desk.levels import bases_text, level_schema, resolve_levels
 from desk.ratings import most_conservative
 
 MEMO_RULES = """ROLE: you are the Super Manager. For the horizon below, the desks' managers either
@@ -34,9 +36,12 @@ The action is fixed by the rating and the investor's position; explain it in act
 Valuation: say plainly whether the stock trades at a discount or a premium to the fair value
 methods in the shared computed data, and whether the discount looks deserved.
 
-Price levels: use only the shared computed data (valuation panel, price anchors) and levels
-explicitly stated in the desk reports. Every level gives a price (or a tight range) and a
-one-line reason tied to that data. Keep it simple: a guide, not a trading system.
+Price levels: you do not write prices. For each level pick its basis by id from LEVEL BASES
+below, optionally an atr_offset in multiples of the 14-day ATR (between -3 and 3; negative is
+below the basis), and optionally range_to, a second basis that makes the level a range
+(otherwise "none"). Code computes the price from those. If no listed basis fits, set basis to
+"none" and say why in the reason. Each reason is one line tied to that data. Keep it simple: a
+guide, not a trading system.
 
 Agreement between the desks is not evidence the rating is right: nothing has measured how often
 agreed ratings work, and the desks share models and some data. Never call the outcome high, strong
@@ -45,12 +50,7 @@ or firm conviction, and never present the desks as independent confirmations of 
 Style: plain and direct. Summary at most 90 words; action_note at most 50 words; 3 to 5 items
 per list, one sentence each."""
 
-_LEVEL = {
-    "type": "object",
-    "properties": {"price": {"type": "string"}, "reason": {"type": "string"}},
-    "required": ["price", "reason"],
-    "additionalProperties": False,
-}
+_LEVEL = level_schema()
 
 MEMO_SCHEMA = {
     "type": "object",
@@ -119,13 +119,17 @@ def _all(names: list[str]) -> str:
 
 
 def write_memo(llm: DeskLLM, reports: str, horizon: str, restated: dict[str, dict],
-               debate: DebateResult | None, result: dict, owns: bool, action: str) -> dict:
+               debate: DebateResult | None, result: dict, owns: bool, action: str,
+               shared: dict | None = None) -> dict:
+    """`shared` is the run's computed data (anchors, valuation panel): the only source of a level."""
     h = VIEWS[horizon]
     lines = [
         MEMO_RULES,
         "",
         f"HORIZON: {h['label']}. {h['weighting']}",
         f"LEVELS FOR THIS HORIZON: {h['levels']}",
+        "LEVEL BASES (id: what it is = this run's value):",
+        bases_text(shared or {}),
         "",
         "INVESTOR POSITION: " + ("already owns this stock." if owns else
                                  "does not own this stock and is considering a new position."),
@@ -150,4 +154,7 @@ def write_memo(llm: DeskLLM, reports: str, horizon: str, restated: dict[str, dic
         + "Leave super_manager_view as an empty string unless the managers did not agree. "
           "Respond with JSON only.",
     ]
-    return llm.json([cached_text(reports), text("\n".join(lines))], MEMO_SCHEMA, max_tokens=12000, model=CALLS["memo"][0], effort=CALLS["memo"][1])
+    memo = llm.json([cached_text(reports), text("\n".join(lines))], MEMO_SCHEMA, max_tokens=12000,
+                    model=CALLS["memo"][0], effort=CALLS["memo"][1])
+    # No retry and no repair: a level the data does not support stays withheld, with its reason.
+    return {**memo, "levels": resolve_levels(memo.get("levels") or {}, shared or {})}

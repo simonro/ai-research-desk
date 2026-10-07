@@ -1,9 +1,12 @@
 """Turn a finished desk run into the one JSON document the dashboard draws.
 
 Inputs, all written by `python -m desk TICKER`:
-    memos/TICKER-DATE.json                  the memo bundle (horizons, debate, both engines)
-    memos/runs/TICKER-DATE/events.jsonl     timings, when the run was live (absent on old runs)
-    memos/runs/TICKER-DATE/*.json           each engine's own report
+    memos/TICKER-DATE.json                  the day's latest memo bundle (horizons, debate, teams)
+    memos/runs/TICKER-DATE-RUN/memo.json    each run's own bundle, kept when a later run that day
+                                            becomes the latest (runs before 2026-10-07 have no RUN
+                                            and their folder is memos/runs/TICKER-DATE)
+    memos/runs/<run folder>/events.jsonl    timings, when the run was live (absent on old runs)
+    memos/runs/<run folder>/*.json          each engine's own report
 Bars for the chart come from Alpaca REST once and are cached in the run folder.
 
 Nothing here writes to the desk's files except that bars cache. Text is the desk's own, with
@@ -320,6 +323,13 @@ def run_flags(bundle: dict, aihf: dict | None, edge: dict | None, engines: list[
     if gone:
         out.append({"kind": "unavailable", "level": "info",
                     "text": f"Edge Desk could not read a source for: {', '.join(gone).lower()}."})
+    unchecked = any(isinstance(lv, dict) and "status" not in lv
+                    for h in (bundle.get("horizons") or {}).values()
+                    for lv in ((h.get("memo") or {}).get("levels") or {}).values())
+    if unchecked:
+        out.append({"kind": "levels_unchecked", "level": "info",
+                    "text": "Price levels in this run were written by the model before levels were computed "
+                            "in code (2026-10-07): treat them as unchecked."})
     flagged = sum(1 for h in (bundle.get("horizons") or {}).values()
                   for t in ((h.get("debate") or {}).get("turns") or []) if "found in no report" in (t.get("note") or ""))
     if flagged:
@@ -329,22 +339,40 @@ def run_flags(bundle: dict, aihf: dict | None, edge: dict | None, engines: list[
     return out
 
 
-def history(ticker: str, as_of: str) -> list[dict]:
-    """Earlier runs of the same symbol, newest first: the ratings then and the close then."""
-    out = []
+def _history_row(day: str, b: dict, latest_id: str | None) -> dict:
+    hz = b.get("horizons") or {}
+    shared = b.get("ai_hedge_fund") or b.get("edge_desk") or {}
+    rid = b.get("run_id")
+    return {"date": day, "run_id": rid, "latest": rid == latest_id, "time": (b.get("generated_at") or "")[11:16],
+            "mode": b.get("mode") or "debate", "close": shared.get("last_close"),
+            "plan": (b.get("plan") or {}).get("name"),
+            "ratings": {k: (hz.get(k) or {}).get("outcome", {}).get("rating") for k in ("swing", "long_term") if k in hz},
+            "status": {k: (hz.get(k) or {}).get("outcome", {}).get("status") for k in ("swing", "long_term") if k in hz}}
+
+
+def same_day(ticker: str, as_of: str) -> list[dict]:
+    """Every kept run of the symbol on that day, newest first (one per day before 2026-10-07)."""
+    pointer = _json(MEMOS / f"{ticker}-{as_of}.json") or {}
+    rows = [_history_row(as_of, b, pointer.get("run_id"))
+            for b in (_json(p) for p in (MEMOS / "runs").glob(f"{ticker}-{as_of}-*/memo.json")) if b]
+    if pointer and not pointer.get("run_id"):
+        rows.append(_history_row(as_of, pointer, None) | {"latest": True})
+    return sorted(rows, key=lambda r: r["time"], reverse=True)
+
+
+def history(ticker: str, as_of: str, shown: str | None = None) -> list[dict]:
+    """Other runs of the same symbol, newest first: the ratings then and the close then. Earlier
+    days by their latest run, and every other run of the shown day."""
+    # `shown` is the run on screen; None means the day's latest is.
+    out = [r for r in same_day(ticker, as_of) if not (r["run_id"] == shown if shown else r["latest"])]
     for path in MEMOS.glob(f"{ticker}-????-??-??.json"):
         day = path.stem[len(ticker) + 1:]
         if day >= as_of:
             continue
         b = _json(path)
-        if not b:
-            continue
-        hz = b.get("horizons") or {}
-        shared = b.get("ai_hedge_fund") or b.get("edge_desk") or {}
-        out.append({"date": day, "mode": b.get("mode") or "debate", "close": shared.get("last_close"),
-                    "ratings": {k: (hz.get(k) or {}).get("outcome", {}).get("rating") for k in ("swing", "long_term") if k in hz},
-                    "status": {k: (hz.get(k) or {}).get("outcome", {}).get("status") for k in ("swing", "long_term") if k in hz}})
-    return sorted(out, key=lambda r: r["date"], reverse=True)
+        if b:
+            out.append(_history_row(day, b, b.get("run_id")))
+    return sorted(out, key=lambda r: (r["date"], r["time"]), reverse=True)
 
 
 def edge_team(edge: dict, t: dict) -> dict:
@@ -373,8 +401,13 @@ def horizon(key: str, h: dict) -> dict:
     for k in ("entry_zone", "stop", "first_target", "trim"):
         lv = (memo.get("levels") or {}).get(k)
         if lv:
-            levels.append({"key": k, "label": LEVEL_LABEL[k], "price": lv.get("price"),
-                           "reason": teams(lv.get("reason")), "values": prices(lv.get("price"))})
+            status = lv.get("status") or "unchecked"          # unchecked: written before 2026-10-07
+            values = ([] if status == "withheld" else
+                      sorted({lv["low"], lv["high"]}) if status == "checked" else prices(lv.get("price")))
+            levels.append({"key": k, "label": LEVEL_LABEL[k], "price": lv.get("price"), "status": status,
+                           "reason": teams(lv.get("reason")) if status != "withheld"
+                           else teams(f"{lv.get('why')}. {lv.get('reason') or ''}".strip()),
+                           "how": lv.get("how"), "values": values})
     turns = []
     if deb:
         for tr in deb.get("turns") or []:
@@ -403,13 +436,21 @@ def horizon(key: str, h: dict) -> dict:
                      "manager_view": teams(memo.get("super_manager_view") or "")}}
 
 
-def build(ticker: str, as_of: str) -> dict:
+def build(ticker: str, as_of: str, run: str | None = None) -> dict:
+    """The day's latest run, or with `run` one particular run of that day."""
     # Both become memos/ paths, and the ticker also goes into an Alpaca URL that carries the keys.
     ticker, as_of = validate.ticker(ticker), validate.day(as_of)
-    bundle = _json(MEMOS / f"{ticker}-{as_of}.json")
+    pointer = _json(MEMOS / f"{ticker}-{as_of}.json")
+    if run:
+        run = validate.run_id(run)
+        bundle = _json(validate.inside(MEMOS / "runs", f"{ticker}-{as_of}-{run}") / "memo.json")
+    else:
+        bundle = pointer
     if not bundle:
-        raise FileNotFoundError(f"no memo for {ticker} on {as_of}")
-    run_dir = MEMOS / "runs" / f"{ticker}-{as_of}"
+        raise FileNotFoundError(f"no memo for {ticker} on {as_of}" + (f" (run {run})" if run else ""))
+    rid = bundle.get("run_id")
+    latest = not pointer or pointer.get("run_id") == rid
+    run_dir = MEMOS / "runs" / (f"{ticker}-{as_of}-{rid}" if rid else f"{ticker}-{as_of}")
     engines = bundle.get("engines") or ["quant", "vets"]
     # The reports the memo was written from, embedded in the bundle, come first. The loose files in
     # the run folder are rewritten by any later run that day, and NVDA 2026-09-18 showed an Edge
@@ -423,11 +464,12 @@ def build(ticker: str, as_of: str) -> dict:
     hz = bundle.get("horizons") or {}
     # Each team's own clock: `native` since 2026-09-24, the retired "as they ran" block before that.
     own_restated = bundle.get("native") or (hz.get("as_they_ran") or {}).get("restated") or {}
-    memo_md = MEMOS / f"{ticker}-{as_of}.md"
+    memo_md = run_dir / "memo.md" if rid and (run_dir / "memo.md").exists() else MEMOS / f"{ticker}-{as_of}.md"
     finished = next((e for e in reversed(evts) if e.get("type") == "run_finished"), None)
     anchor_day = (shared.get("anchors") or {}).get("as_of") or as_of
     return {
-        "ticker": ticker, "date": as_of, "owns": bundle.get("owns"), "generated_at": bundle.get("generated_at"),
+        "ticker": ticker, "date": as_of, "run_id": rid, "latest": latest,
+        "owns": bundle.get("owns"), "generated_at": bundle.get("generated_at"),
         "engines": [e for e in engines if {"quant": ta, "vets": aihf, "edge": edge}[e]],
         "mode": bundle.get("mode") or "debate",
         "close": shared.get("last_close"), "anchors": shared.get("anchors"), "valuation": shared.get("valuation"),
@@ -449,8 +491,12 @@ def build(ticker: str, as_of: str) -> dict:
         # Which subscription answered. Runs from before the ChatGPT plan existed were all Claude.
         "plan": bundle.get("plan") or {"name": "claude" if (bundle.get("costs") or {}).get("billing") == "max" else "api",
                                        "models": [bundle.get("model")] if bundle.get("model") else []},
-        "flags": run_flags(bundle, aihf, edge, engines),
-        "history": history(ticker, as_of),
+        "flags": ([] if latest else [{"kind": "earlier_run", "level": "info",
+                                      "text": f"An earlier run of {ticker} from this day ({(bundle.get('generated_at') or '')[11:16]}); "
+                                              "a later run is the day's result."}]) + run_flags(bundle, aihf, edge, engines),
+        "history": history(ticker, as_of, rid if not latest else None),
+        "provenance": {TEAM[d]: {"reused_from": (p or {}).get("reused_from"), "inputs": (p or {}).get("inputs")}
+                       for d, p in (("A", ta), ("B", aihf), ("C", edge)) if p},
     }
 
 

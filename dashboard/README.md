@@ -23,7 +23,9 @@ going to the end and shows up under Runs when you reopen the page.
   Gridlock with no rating. Without one you get each team's rating side by side and its report.
 - **Live**: each team's agents as they finish, a feed of findings, then the horizon comparison
   and the debate turn by turn. When the memo is written the page becomes the snapshot.
-  If a run stops, Run again reuses whatever finished that day.
+  If a run stops, Run again reuses what finished earlier that day on the same plan, settings and
+  price session. Every run keeps its own folder, so a rerun never replaces an earlier one; the
+  day's latest opens by default and the others are listed under "Other runs".
 - **Snapshot**: symbol card, the call per horizon (rating, action, levels, chart, valuation),
   where the teams disagreed, how each team got there, and the full reports.
 - **Reader**: the combined memo, and each team's report laid out as its own tool writes it.
