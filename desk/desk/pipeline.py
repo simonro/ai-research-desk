@@ -71,6 +71,8 @@ def analyze(llm: DeskLLM, ticker: str, as_of: str, reports_by_desk: dict[str, di
     own_blocks = {d: own_block(ticker, as_of, reports_by_desk, d) for d in reports_by_desk}
     engine = {d: p.get("rating") for d, p in reports_by_desk.items()}
     rated = [d for d in engine if engine[d]]
+    # The data levels are computed from, the same the reports block shows (debate.reports_block).
+    shared = reports_by_desk.get("B") or reports_by_desk.get("C") or {}
     events = events or EventLog(None)
     results: dict[str, dict] = {}
     for key in horizons:
@@ -151,7 +153,7 @@ def analyze(llm: DeskLLM, ticker: str, as_of: str, reports_by_desk: dict[str, di
         events.emit("horizon_outcome", horizon=key, rating=result["rating"], status=result["status"],
                     conviction=result["conviction"], action=action, text=result["how"])
         events.emit("memo_started", horizon=key, text=f"Writing the {VIEWS[key]['label']} memo")
-        memo = write_memo(llm, reports, key, restated, debate, result, owns, action)
+        memo = write_memo(llm, reports, key, restated, debate, result, owns, action, shared=shared)
         events.emit("memo_written", horizon=key, rating=result["rating"],
                     conviction=result["conviction"], action=action, text=memo["headline"])
         # `span` records the question as it was asked, so a later change to the window does not

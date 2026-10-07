@@ -4,16 +4,19 @@
 [![Latest release](https://img.shields.io/github/v/release/simonro/ai-research-desk)](https://github.com/simonro/ai-research-desk/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-A research desk for one stock at a time. Three independent AI research teams study the same
-company, a desk manager compares their calls for two holding periods (swing, 2 days to 8 weeks,
+A research desk for one stock at a time. Three AI research teams study the same company (two
+open-source projects, TradingAgents and ai-hedge-fund, adapted here, and Edge Desk), a desk manager compares their calls for two holding periods (swing, 2 days to 8 weeks,
 and long term, 1 year or more), the teams debate where they disagree, and you get a short memo
 with a rating, the action for your position, price levels and the reasons. It is for people who
 pick their own stocks and want a second, third and fourth opinion that shows its work.
 
 - **It runs on your own AI plan, not an API bill.** Model calls go through your Claude plan (the
   `claude` CLI) or your ChatGPT plan (the `codex` CLI). No per-call charges.
-- **Numbers come from code, not from a model.** Prices, valuation, levels and the data checks are
-  computed. Models write arguments and memos, and figures they quote are checked against the evidence.
+- **Numbers come from code, not from a model.** Prices, valuation and the data checks are computed.
+  For each memo price level the model only picks a computed reference (a moving average, a recent
+  high or low, a fair value, a Street target, optionally offset by ATR) and code works out the price;
+  a level nothing computed supports is withheld. Figures quoted in the debate are checked against
+  the reports.
 - **It refuses rather than guesses.** Stale filings withhold the long-term rating for the whole desk,
   a missing figure is unknown rather than zero, and a failed step is shown as failed.
 - **Research only.** It never places an order or connects to a brokerage account.
@@ -34,15 +37,19 @@ dashboard listens on `localhost` only.
 
 ### What stays local
 
-- Every run: the teams' reports, the debate, the memo and the PDF, saved in `memos/`.
-- Which stocks you research and whether you own them.
+- Every run: the teams' reports, the debate, the memo and the PDF, saved in `memos/`. Every run is
+  kept, including several runs of one stock on the same day.
 - Your settings and keys, in `~/.hedge-desk/.env`.
+
+The run files stay local, but the services below do learn which tickers you research.
 
 ### External services
 
 **Your AI plan (Anthropic for Claude, OpenAI for ChatGPT)**: receives the prompts, which contain
-the ticker, prices, filings figures, headlines and the teams' reports. It never receives your keys
-or whether you own the stock (ownership is applied in code after the analysis). Every call runs with
+the ticker, prices, filings figures, headlines and the teams' reports. It never receives your keys.
+Whether you own the stock is kept out of every prompt that rates or debates it, so it cannot sway
+a rating; it is sent once per horizon to the final memo writer, which explains the action for your
+position (the action itself is set in code from the rating and your position). Every call runs with
 no tools, no web search, no file access and none of your personal CLI settings.
 
 **Alpaca (optional)**: receives the tickers you run, to return prices, splits and news headlines.
@@ -68,7 +75,9 @@ Keys live in `~/.hedge-desk/.env` on your machine, which is never committed. Do 
   what did not survive, and writes the memo. A 2 against 1 standoff is reported as gridlock, not
   decided for you.
 - **Data checks**: one settled close for every team, a stale-filing rule, unknown values kept unknown.
-- **The dashboard**: start a run, watch the teams work live, reopen any past run, a weekly review of
+- **The dashboard**: start a run, watch the teams work live, reopen any past run (a team report from
+  earlier the same day is reused only if it came from the same plan, price session, models, fund and
+  code), a weekly review of
   the latest call per symbol, and a two-page PDF summary.
 
 ## Screenshots

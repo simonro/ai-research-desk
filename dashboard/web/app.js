@@ -75,6 +75,8 @@ function fixesBox(run, team) {
 }
 
 const Q = () => Object.fromEntries(new URLSearchParams(location.search));
+// A run's address: the day's latest is ?t=&d=, any other run of that day adds r (its run id).
+const runQ = run => ({ t: run.ticker, d: run.date, ...(run.run_id && !run.latest ? { r: run.run_id } : {}) });
 function go(params, replace = false) {
   const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v != null && v !== "")).toString();
   history[replace ? "replaceState" : "pushState"](null, "", qs ? "?" + qs : location.pathname);
@@ -379,7 +381,7 @@ function teamCard(run, team) {
   return `<article class="team ${T.cls}"><div class="team-h"><div class="n">${T.caps}</div><div class="m">${meta}</div>
     <div class="tr r-${rc(t.rating)}">${esc((t.rating || "Withheld").toUpperCase())}</div><div class="tf">${esc(t.timeframe || "")}${votes}</div>
     <p class="case"><b>${team === "quant" ? "The decision" : team === "vets" ? "Main case" : "How it was scored"}</b>${esc(t.case)}</p></div>
-    ${agentRows(run, team)}<a class="team-doc" href="?${new URLSearchParams({ t: run.ticker, d: run.date, doc: team })}" data-nav>Read the ${T.name}'s full report ${ico.arrow}${fixesFor(run, team).length ? `<small>${fixesFor(run, team).length} statement${fixesFor(run, team).length > 1 ? "s" : ""} marked after the debate</small>` : ""}</a><button class="phone-more" data-panel="agent:${team}:${t.agents[0]?.id}">See all ${t.agents.length} ${team === "vets" ? "members" : team === "quant" ? "agents" : "steps"} ${ico.arrow}</button></article>`;
+    ${agentRows(run, team)}<a class="team-doc" href="?${new URLSearchParams({ ...runQ(run), doc: team })}" data-nav>Read the ${T.name}'s full report ${ico.arrow}${fixesFor(run, team).length ? `<small>${fixesFor(run, team).length} statement${fixesFor(run, team).length > 1 ? "s" : ""} marked after the debate</small>` : ""}</a><button class="phone-more" data-panel="agent:${team}:${t.agents[0]?.id}">See all ${t.agents.length} ${team === "vets" ? "members" : team === "quant" ? "agents" : "steps"} ${ico.arrow}</button></article>`;
 }
 
 function mergeSvg(teams, pending) {
@@ -436,7 +438,7 @@ function reportDocs(run) {
   ].filter(Boolean);
 }
 function reportsSection(run) {
-  const link = doc => "?" + new URLSearchParams({ t: run.ticker, d: run.date, doc });
+  const link = doc => "?" + new URLSearchParams({ ...runQ(run), doc });
   return `<section class="sec" aria-label="Full reports">
     <div class="eyebrow"><b>Full reports</b><span>${run.mode === "reports" ? "Each team's report as its own tool wrote it" : "The memo that combines them, and each team's report as its own tool wrote it"}</span></div>
     <div class="docs">${reportDocs(run).map(([k, n, c, m]) => `<a class="doc" href="${link(k)}" data-nav><i style="background:${c}"></i><span><span class="n">${n}</span><span class="m">${m}</span></span><span class="go2">Read</span></a>`).join("")}</div>
@@ -518,11 +520,13 @@ function teamMatrix(run) {
 }
 function historyTable(run) {
   const hs = run.history || [];
-  if (!hs.length) return `<p class="fs-cov">No earlier run of ${esc(run.ticker)} on file.</p>`;
+  if (!hs.length) return `<p class="fs-cov">No other run of ${esc(run.ticker)} on file.</p>`;
   const word = (x, k) => x.ratings[k] || (x.status?.[k] ? verdictWord({ status: x.status[k] }) : x.mode === "reports" ? "reports only" : "");
   return `<table class="fs-hist"><thead><tr><th>Run</th><th>Long term</th><th>Swing</th><th class="num">Close then</th><th class="num">Since</th></tr></thead><tbody>${hs.map(x => {
     const chg = x.close && run.close ? (run.close / x.close - 1) * 100 : null;
-    return `<tr><td><a href="?${new URLSearchParams({ t: run.ticker, d: x.date })}" data-nav>${fmtDate(x.date)}</a></td><td class="r-${rc(x.ratings.long_term)}">${esc(word(x, "long_term"))}</td><td class="r-${rc(x.ratings.swing)}">${esc(word(x, "swing"))}</td><td class="num">${money(x.close)}</td><td class="num">${chg == null ? "" : (chg >= 0 ? "+" : "") + chg.toFixed(1) + "%"}</td></tr>`;
+    const href = { t: run.ticker, d: x.date, ...(x.run_id && !x.latest ? { r: x.run_id } : {}) };
+    const when = fmtDate(x.date) + (x.time && x.date === run.date ? ` ${x.time}` : "") + (x.date === run.date && x.latest ? " (latest)" : "");
+    return `<tr><td><a href="?${new URLSearchParams(href)}" data-nav>${esc(when)}</a></td><td class="r-${rc(x.ratings.long_term)}">${esc(word(x, "long_term"))}</td><td class="r-${rc(x.ratings.swing)}">${esc(word(x, "swing"))}</td><td class="num">${money(x.close)}</td><td class="num">${chg == null ? "" : (chg >= 0 ? "+" : "") + chg.toFixed(1) + "%"}</td></tr>`;
   }).join("")}</tbody></table>`;
 }
 function valuationLine(run) {
@@ -557,7 +561,7 @@ function firstScreen(run, key) {
         <div><h4 class="fs-h">Risks</h4><ul>${h.memo.risks.slice(0, 4).map(x => `<li>${esc(x)}</li>`).join("")}</ul></div></div>
       ${h.memo.watch.length ? `<p class="fs-val"><b>Review when:</b> ${esc(h.memo.watch[0])}</p>` : ""}` : ""}
     <h4 class="fs-h">The teams: own call, then the vote</h4>${teamMatrix(run)}
-    <div class="fs-two fs-gap"><div><h4 class="fs-h">Earlier runs of ${esc(run.ticker)}</h4>${historyTable(run)}</div>
+    <div class="fs-two fs-gap"><div><h4 class="fs-h">Other runs of ${esc(run.ticker)}</h4>${historyTable(run)}</div>
       <div><h4 class="fs-h">Six months${swing ? ", with the swing levels" : ""}</h4><div class="chart">${chart(run, swing || run.horizons[0])}</div></div></div>
     <h4 class="fs-h">Valuation references</h4>${valuationLine(run)}
   </section>`;
@@ -638,7 +642,7 @@ function panel(run, spec) {
       body = `<h5>Call</h5><p class="takeaway">${esc(cap(ag.call))}${ag.confidence ? `, ${Math.round(ag.confidence)}% confidence` : ""}${ag.value != null ? ` · signal ${ag.value >= 0 ? "+" : ""}${ag.value.toFixed(2)}` : ""}</p>
         <h5>Reasoning</h5><p class="ptext">${mark(run, "vets", ag.text || "No view: nothing in the window to act on.", false)}</p>`;
     }
-    const doc = "?" + new URLSearchParams({ t: run.ticker, d: run.date, doc: team }) + (team === "quant" ? "#" + ag.id : "");
+    const doc = "?" + new URLSearchParams({ ...runQ(run), doc: team }) + (team === "quant" ? "#" + ag.id : "");
     return `<aside class="panel" aria-label="${esc(ag.name)}"><div class="p-top"><div class="crumb"><i style="background:${T.color}"></i>${esc(run.ticker)} · ${T.name} · ${esc(ag.stage)}</div>
       <div class="p-row"><div><div class="p-title">${esc(ag.name)}</div><div class="p-meta">${ag.at != null ? `Finished at ${mmss(ag.at)}` : "Finished"}${ag.took != null && team !== "vets" ? ` · took ${mmss(ag.took)}` : ""}${ag.words ? ` · ${ag.words.toLocaleString()} words` : ""}</div></div>
         <div class="p-btns"><button class="p-btn" ${prev ? `data-panel="agent:${team}:${prev.id}"` : "disabled"} aria-label="Previous">${ico.up}</button><button class="p-btn" ${next ? `data-panel="agent:${team}:${next.id}"` : "disabled"} aria-label="Next">${ico.dn}</button>${close}</div></div></div>
@@ -729,7 +733,7 @@ function readerPage(run, doc) {
   const docs = reportDocs(run);
   if (!docs.some(d => d[0] === doc)) doc = docs[0][0];
   const d = docBody(run, doc);
-  const base = { t: run.ticker, d: run.date };
+  const base = { ...runQ(run) };
   const short = { memo: "Combined memo", quant: "Quant desk", vets: "Veterans", edge: "Edge Desk" };
   return `${phoneTop()}<div class="rd-top"><div class="rd-top-in">
       <a class="rd-back" href="?${new URLSearchParams(base)}" data-nav>${ico.arrow} ${esc(run.ticker)} · ${fmtDate(run.date, false)}</a>
@@ -932,8 +936,8 @@ function liveAgentPanel(L, spec) {
 }
 
 function runTools(run) {
-  const link = doc => "?" + new URLSearchParams({ t: run.ticker, d: run.date, doc });
-  const pdf = kind => `/api/pdf?${new URLSearchParams({ t: run.ticker, d: run.date, kind })}`;
+  const link = doc => "?" + new URLSearchParams({ ...runQ(run), doc });
+  const pdf = kind => `/api/pdf?${new URLSearchParams({ ...runQ(run), kind })}`;
   return `<div class="tools">
     <details class="menu"><summary class="tool">Reports ${ico.dn}</summary><div class="pop">${reportDocs(run).map(([k, n, c]) => `<a href="${link(k)}" data-nav><i style="background:${c}"></i>${n}</a>`).join("")}</div></details>
     <details class="menu"><summary class="tool">Download PDF ${ico.dn}</summary><div class="pop wide">
@@ -1014,9 +1018,9 @@ async function route() {
     return render();
   }
   clearInterval(S.poll); S.poll = null; S.liveState = null;
-  if (q.t && q.d && (!S.run || S.run.ticker !== q.t || S.run.date !== q.d)) {
+  if (q.t && q.d && (!S.run || S.run.ticker !== q.t || S.run.date !== q.d || (S.run.shownR || "") !== (q.r || ""))) {
     render();
-    try { S.run = await api(`/api/run?t=${encodeURIComponent(q.t)}&d=${encodeURIComponent(q.d)}`); }
+    try { S.run = await api(`/api/run?t=${encodeURIComponent(q.t)}&d=${encodeURIComponent(q.d)}${q.r ? `&r=${encodeURIComponent(q.r)}` : ""}`); S.run.shownR = q.r || ""; }
     catch (e) { S.loadError = `Could not open ${q.t} for ${q.d}: ${e.message}`; }
     loadProfile(q.t);
   }

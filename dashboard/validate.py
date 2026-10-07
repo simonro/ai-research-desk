@@ -14,6 +14,7 @@ from pathlib import Path
 
 _TICKER = re.compile(r"[A-Z][A-Z.]{0,5}")          # ECG, BRK.B; what the run form has always taken
 _DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+_RUN = re.compile(r"[0-9]{6}-[0-9a-f]{6}")             # HHMMSS-hex, as `python -m desk` names a run
 
 
 class BadInput(ValueError):
@@ -36,6 +37,13 @@ def day(value) -> str:
     except ValueError:
         raise BadInput(f"{d} is not a real date.") from None
     return d
+
+
+def run_id(value) -> str:
+    r = str(value or "").strip()
+    if not _RUN.fullmatch(r):
+        raise BadInput("Run ids look like 153012-a1b2c3.")
+    return r
 
 
 def inside(root: Path, name: str) -> Path:

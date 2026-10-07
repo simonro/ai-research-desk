@@ -234,7 +234,7 @@ def test_markdown_and_vault_note_render_without_dashes():
     assert "own call, on its own clock (provenance, not compared): quant desk Hold (3-6 months), " \
            "veterans Overweight (clock not stated)" in md
     assert "conviction: Agreed before debate" in vault_note(bundle, md)
-    assert "# ECG desk memo, 2026-09-15" in md and "| Entry zone | 104-108 |" in md
+    assert "# ECG desk memo, 2026-09-15" in md and "| Entry zone | 104-108 (unchecked) |" in md
     assert "## Valuation" in md and "mean 176.0" in md and "Hold at current weight." in md
     assert "Stay out; keep on the watchlist with an entry level" in md
     note = vault_note(bundle, md)
@@ -396,7 +396,9 @@ def test_a_full_run_saves_each_team_s_own_call_and_no_retired_horizon(tmp_path, 
     assert bundle["native"] == {"A": {"rating": "Overweight", "timeframe": "3-6 months"},
                                 "B": {"rating": "Overweight", "timeframe": None}}
     assert bundle["horizons"]["swing"]["span"] == "2 days to 8 weeks"
-    log = (tmp_path / "runs" / "ECG-2026-09-24" / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    run_dir = tmp_path / "runs" / f"ECG-2026-09-24-{bundle['run_id']}"      # every run keeps its own folder
+    assert json.loads((run_dir / "memo.json").read_text(encoding="utf-8")) == bundle
+    log = (run_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()
     clocks = next(e for e in map(json.loads, log) if e["type"] == "timeframes")
     assert clocks["tape"] == "3-6 months" and "value" not in clocks        # emit drops None; the live view copes
     md = (tmp_path / "ECG-2026-09-24.md").read_text(encoding="utf-8")

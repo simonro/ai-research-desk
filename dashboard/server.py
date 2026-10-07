@@ -6,7 +6,7 @@ finished run as a snapshot.
 
 API (local only, binds 127.0.0.1):
     GET  /api/runs                 finished runs (from memos/) and runs in progress
-    GET  /api/run?t=ECG&d=DATE     one finished run, shaped for the page (runview.build)
+    GET  /api/run?t=ECG&d=DATE[&r=RUN]   the day's latest run, or one run of that day (runview.build)
     GET  /api/profile?t=ECG        the symbol card (Yahoo, cached a day)
     GET  /api/logo?t=ECG           the company logo, or 404 (the page draws a letter tile)
     POST /api/run                  {ticker, own, engines, debate} -> starts `python -m desk TICKER ...`
@@ -21,9 +21,10 @@ Origin and the X-Desk-Token header. Another site's page can send a request here 
 the token, so it cannot start or cancel a run.
 
 A run is the desk's own CLI in its own process, exactly as from the terminal: same memo, same
-files, same Obsidian note. The server only starts it and reads what it writes. Engine reports
-saved earlier the same day are reused by the desk, so "Run again" after a failure only redoes
-the team that failed.
+files, same Obsidian note. The server only starts it and reads what it writes. Every run keeps
+its own folder (memos/runs/TICKER-DATE-RUN). A team report saved earlier the same day is reused
+only when it came from the same inputs (plan, price session, models, fund, code), so "Run again"
+after a failure only redoes the team that failed, and switching plan reruns every team.
 """
 
 from __future__ import annotations
@@ -46,6 +47,7 @@ from urllib.parse import parse_qs, urlparse
 import symbol_card as symbol
 import runview
 import validate
+from desk.procs import kill_tree, tree_kwargs   # runview put the desk package on the path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
@@ -121,17 +123,18 @@ def start_run(ticker: str, own: bool, engines: list[str] | None = None, debate: 
         for rid, r in RUNS.items():                       # one run per symbol at a time
             if r["ticker"] == ticker and r["proc"].poll() is None:
                 return {"id": rid, "ticker": ticker, "date": r["date"], "already": True}
-        run_dir = MEMOS / "runs" / f"{ticker}-{as_of}"
+        run_id = f"{time.strftime('%H%M%S')}-{secrets.token_hex(3)}"
+        run_dir = MEMOS / "runs" / f"{ticker}-{as_of}-{run_id}"     # its own folder: nothing earlier is reset
         run_dir.mkdir(parents=True, exist_ok=True)
         (run_dir / "events.jsonl").write_text("", encoding="utf-8")
         cmd = [str(DESK_PYTHON), "-m", "desk", ticker, "--own", *([ticker] if own else []),
                "--horizon", "all", "--date", as_of, "--engines", ",".join(engines),
-               *([] if debate else ["--no-debate"])]
+               *([] if debate else ["--no-debate"]), "--run-id", run_id]
         env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8", "DESK_PLAN": plan}
         log = (run_dir / "desk.log").open("w", encoding="utf-8")
         proc = subprocess.Popen(cmd, cwd=DESK_DIR, env=env, stdout=log, stderr=subprocess.STDOUT,
-                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        rid = f"{ticker}-{as_of}-{uuid.uuid4().hex[:8]}"   # seconds collide; two runs, one id
+                                **tree_kwargs())
+        rid = f"{ticker}-{as_of}-{run_id}"
         RUNS[rid] = {"proc": proc, "ticker": ticker, "date": as_of, "own": own, "run_dir": run_dir,
                      "started": time.time(), "engines": engines, "debate": debate, "plan": plan}
     threading.Thread(target=symbol.get, args=(ticker,), daemon=True).start()
@@ -148,16 +151,9 @@ def cancel_run(rid: str) -> dict:
         run = RUNS.get(rid)
     if not run:
         return {"error": "This run is not known to the server."}
-    proc = run["proc"]
-    if proc.poll() is None:
-        if os.name == "nt":
-            subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True)
-        else:
-            proc.kill()
-        try:
-            proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            pass
+    # The whole tree even when the desk itself already exited: on Mac and Linux its teams are in
+    # its process group and can outlive it. Windows stops the tree while the desk is alive.
+    kill_tree(run["proc"])
     run["cancelled"] = True
     print(f"[desk] cancelled {run['ticker']} ({rid})")
     return {"ok": True, "ticker": run["ticker"]}
@@ -172,7 +168,7 @@ CHROME = [Path(os.environ.get("PROGRAMFILES", r"C:\Program Files")) / "Google/Ch
                                                          "chromium-browser", "microsoft-edge")) if p]]
 
 
-def make_pdf(ticker: str, as_of: str, kind: str) -> bytes:
+def make_pdf(ticker: str, as_of: str, kind: str, run: str | None = None) -> bytes:
     """Print the page's own print view (?print=brief|full) to PDF with headless Chrome or Edge,
     so the PDF is the dashboard's typography and charts, not a second renderer to keep in step."""
     import tempfile
@@ -182,7 +178,7 @@ def make_pdf(ticker: str, as_of: str, kind: str) -> bytes:
     kind = "full" if kind == "full" else "brief"
     with tempfile.TemporaryDirectory(prefix="desk-pdf-") as tmp:
         out = Path(tmp) / "report.pdf"
-        url = f"http://127.0.0.1:{PORT_IN_USE}/?t={ticker}&d={as_of}&print={kind}"
+        url = f"http://127.0.0.1:{PORT_IN_USE}/?t={ticker}&d={as_of}&print={kind}" + (f"&r={run}" if run else "")
         subprocess.run([str(browser), "--headless=new", "--disable-gpu", "--no-pdf-header-footer",
                         f"--user-data-dir={Path(tmp) / 'profile'}", "--virtual-time-budget=30000",
                         "--run-all-compositor-stages-before-draw", f"--print-to-pdf={out}", url],
@@ -281,7 +277,8 @@ class Handler(SimpleHTTPRequestHandler):
             if url.path == "/api/runs":
                 return self._json({"runs": runview.index(), "live": live_runs(), "plan": plan_info()})
             if url.path == "/api/run":
-                return self._json(runview.build(validate.ticker(q.get("t")), validate.day(q.get("d"))))
+                return self._json(runview.build(validate.ticker(q.get("t")), validate.day(q.get("d")),
+                                                validate.run_id(q["r"]) if q.get("r") else None))
             if url.path == "/api/profile":
                 return self._json(symbol.get(validate.ticker(q.get("t")), refresh=q.get("refresh") == "1"))
             if url.path == "/api/logo":
@@ -298,9 +295,10 @@ class Handler(SimpleHTTPRequestHandler):
             if url.path == "/api/pdf":
                 # Validated first: both go into a URL for headless Chrome and into a header.
                 t, d = validate.ticker(q.get("t")), validate.day(q.get("d"))
+                r = validate.run_id(q["r"]) if q.get("r") else None
                 kind = "full" if q.get("kind") == "full" else "brief"
-                pdf = make_pdf(t, d, kind)
-                name = f"{t}-{d}-{'full' if kind == 'full' else 'summary'}.pdf"
+                pdf = make_pdf(t, d, kind, r)
+                name = f"{t}-{d}{'-' + r if r else ''}-{'full' if kind == 'full' else 'summary'}.pdf"
                 self.send_response(200)
                 self.send_header("Content-Type", "application/pdf")
                 self.send_header("Content-Disposition", f'attachment; filename="{name}"')
