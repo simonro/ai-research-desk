@@ -26,7 +26,7 @@ from pathlib import Path
 
 from desk.config import AIHF_DIR, EDGE_DIR, TA_DIR
 
-VERSION = 2
+VERSION = 3
 EDGE_ENV = Path.home() / ".edge-desk" / ".env"
 MANDATES = Path.home() / ".hedge-fund" / "mandates"
 DESK_PACKAGE = Path(__file__).resolve().parent
@@ -34,8 +34,13 @@ DESK_PACKAGE = Path(__file__).resolve().parent
 PREFIX = {"quant": "TRADINGAGENTS_", "vets": "HEDGE_FUND_", "edge": "EDGE_DESK_"}
 SHARED = ("ALPACA_DATA_FEED", "DESK_LLM")                    # every team's data feed and call path
 CHATGPT = ("DESK_CHATGPT_STRONG", "DESK_CHATGPT_FAST")
-# Where output goes, and secrets: neither changes what a team concludes.
-_SKIP = re.compile(r"(KEY|TOKEN|SECRET|PASSWORD|_DIR|_PATH|_FILE|VAULT)", re.I)
+# Where output goes, and secrets: neither changes what a team concludes. A credential is a KEY,
+# SECRET, PASSWORD or a singular TOKEN (ACCESS_TOKEN); a TOKENS budget (MAX_TOKENS) is a research
+# setting and is kept (Codex G2).
+_SKIP = re.compile(r"(KEY|TOKEN(?!S)|SECRET|PASSWORD|CREDENTIAL|_DIR|_PATH|_FILE|VAULT)", re.I)
+# Data sources an engine picks by which credentials exist. The choice is recorded, never the value.
+_ALPACA_PAIRS = (("ALPACA_API_KEY", "ALPACA_SECRET_KEY"), ("APCA_API_KEY_ID", "APCA_API_SECRET_KEY"),
+                 ("ALPACA_TRADING_KEY", "ALPACA_TRADING_SECRET"))
 SOURCE = {"quant": lambda: TA_DIR / "tradingagents", "vets": lambda: AIHF_DIR / "hedge_fund",
           "edge": lambda: EDGE_DIR / "edgedesk"}
 _SOURCE_SUFFIXES = {".py", ".yaml", ".yml", ".json", ".toml", ".md", ".txt", ".j2", ".jinja"}
@@ -44,6 +49,7 @@ _SOURCE_SUFFIXES = {".py", ".yaml", ".yml", ".json", ".toml", ".md", ".txt", ".j
 def expected(engine: str, plan: str, session: str, mandate: str | None = None, env=None) -> dict:
     """The inputs a run of `engine` would have right now."""
     out = {"v": VERSION, "plan": plan, "session": session, "settings": settings(engine, plan, env),
+           "data": data_sources(engine, env),
            "code": {"desk": source_digest(DESK_PACKAGE), "engine": source_digest(SOURCE[engine]())}}
     if engine == "vets":
         out["mandate"] = {"name": mandate, "sha256": mandate_hash(mandate)}
@@ -70,6 +76,31 @@ def settings(engine: str, plan: str, env=None) -> dict:
     return dict(sorted(values.items()))
 
 
+def data_sources(engine: str, env=None) -> dict:
+    """Which evidence sources the engine will resolve to, from which credentials are present: a
+    new Financial Datasets key moves the Veterans off the free stack, Alpaca keys decide between
+    Alpaca and Yahoo prices, FRED and Alpha Vantage keys add TradingAgents data. Labels only."""
+    env = dict(os.environ if env is None else env)
+    if engine == "edge":
+        env.update({k: v for k, v in _dotenv(EDGE_ENV).items() if v})
+    if engine == "quant":
+        return {"fred": bool(env.get("FRED_API_KEY")), "alpha_vantage": bool(env.get("ALPHA_VANTAGE_API_KEY"))}
+    out = {"alpaca": _has_alpaca(env)}
+    if engine == "vets":
+        # hedge_fund/data/factory.py: data_provider(), without importing the engine.
+        explicit = (env.get("HEDGE_FUND_DATA_PROVIDER") or "").strip().lower()
+        out["provider"] = ("financialdatasets" if explicit in ("fd", "financialdatasets", "financial_datasets")
+                           else explicit or ("financialdatasets" if env.get("FINANCIAL_DATASETS_API_KEY") else "free"))
+    return out
+
+
+def _has_alpaca(env) -> bool:
+    sources = [env]
+    if env.get("ALPACA_ENV_FILE"):
+        sources.append(_dotenv(Path(env["ALPACA_ENV_FILE"])))
+    return any(s.get(k) and s.get(sec) for s in sources for k, sec in _ALPACA_PAIRS)
+
+
 def differs(saved: dict | None, wanted: dict) -> str | None:
     """Why a saved report cannot stand in for a new run, or None when it can."""
     if not saved:
@@ -77,7 +108,8 @@ def differs(saved: dict | None, wanted: dict) -> str | None:
     if None in (wanted.get("code") or {"desk": None}).values():
         return "this install's source version cannot be read, so nothing is reused"
     for key, label in (("v", "provenance version"), ("plan", "plan"), ("session", "price session"),
-                       ("settings", "research settings"), ("mandate", "fund"), ("code", "source code")):
+                       ("settings", "research settings"), ("data", "data sources"), ("mandate", "fund"),
+                       ("code", "source code")):
         if saved.get(key) != wanted.get(key):
             return f"its {label} differs"
     return None

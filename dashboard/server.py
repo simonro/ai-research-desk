@@ -47,7 +47,7 @@ from urllib.parse import parse_qs, urlparse
 import symbol_card as symbol
 import runview
 import validate
-from desk.procs import kill_tree, owned, tree_kwargs   # runview put the desk package on the path
+from desk.procs import kill_tree, launch, owned   # runview put the desk package on the path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
@@ -132,8 +132,7 @@ def start_run(ticker: str, own: bool, engines: list[str] | None = None, debate: 
                *([] if debate else ["--no-debate"]), "--run-id", run_id]
         env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8", "DESK_PLAN": plan}
         log = (run_dir / "desk.log").open("w", encoding="utf-8")
-        proc = subprocess.Popen(cmd, cwd=DESK_DIR, env=env, stdout=log, stderr=subprocess.STDOUT,
-                                **tree_kwargs())
+        proc = launch(cmd, cwd=DESK_DIR, env=env, stdout=log, stderr=subprocess.STDOUT)
         rid = f"{ticker}-{as_of}-{run_id}"
         RUNS[rid] = {"proc": proc, "ticker": ticker, "date": as_of, "own": own, "run_dir": run_dir,
                      "started": time.time(), "engines": engines, "debate": debate, "plan": plan}

@@ -19,7 +19,7 @@ from desk.config import (AIHF_DIR, AIHF_PYTHON, AIHF_TIMEOUT_SECONDS, EDGE_DIR, 
                          EDGE_TIMEOUT_SECONDS, RUNNERS_DIR, TA_DIR, TA_PYTHON,
                          TA_REPORT_FILES, TA_TIMEOUT_SECONDS)
 from desk.events import EventLog
-from desk.procs import kill_tree, register, tree_kwargs, unregister
+from desk.procs import kill_tree, launch, register, unregister
 from desk.ratings import normalize
 
 _RATING_RE = re.compile(r"\*\*Rating\*\*:\s*\**\s*([A-Za-z]+)")
@@ -182,8 +182,8 @@ def _run(python: Path, cwd: Path, args: list, out: Path, log: Path, timeout: int
     with open(log, "w", encoding="utf-8") as log_file:
         # Its own process tree, so a timeout stops the model calls under the runner too;
         # subprocess.run's timeout kills only the runner and leaves them spending the plan.
-        proc = subprocess.Popen([str(python), *map(str, args)], cwd=cwd, env=env,
-                                stdout=log_file, stderr=subprocess.STDOUT, **tree_kwargs())
+        proc = launch([str(python), *map(str, args)], cwd=cwd, env=env,
+                      stdout=log_file, stderr=subprocess.STDOUT, kill_on_close=True)
         # Its own group is outside the desk's, so the run folder records it while it is alive:
         # cancelling the run stops it through that record (desk/procs.py).
         register(log.parent, proc)
@@ -193,6 +193,9 @@ def _run(python: Path, cwd: Path, args: list, out: Path, log: Path, timeout: int
             kill_tree(proc)
             raise DeskError(f"{name} timed out after {timeout // 60} minutes (log: {log})") from exc
         finally:
+            # A runner that crashed (or even finished) can leave a model call running in its tree.
+            # Stop that tree before the record forgets it, or no cancel could reach it later.
+            kill_tree(proc, grace=2.0)
             unregister(log.parent, proc)
     if proc.returncode != 0 or not out.exists():
         tail = "\n".join(log.read_text(encoding="utf-8", errors="replace").splitlines()[-15:])
