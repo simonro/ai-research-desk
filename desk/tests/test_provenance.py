@@ -9,11 +9,13 @@ import pytest
 import desk.provenance as prov
 from desk import engines
 
+REAL_DIGEST = prov.source_digest.__wrapped__     # the fixture below stubs the cached one
+
 
 @pytest.fixture(autouse=True)
 def fixed_world(tmp_path, monkeypatch):
     # No git calls and no real settings files: the inputs depend only on what each test sets.
-    monkeypatch.setattr(prov, "revision", lambda folder: "abc123")
+    monkeypatch.setattr(prov, "source_digest", lambda folder: "abc123")
     monkeypatch.setattr(prov, "EDGE_ENV", tmp_path / "no-edge.env")
     monkeypatch.setattr(prov, "MANDATES", tmp_path / "mandates")
     (tmp_path / "mandates").mkdir()
@@ -97,3 +99,51 @@ def test_a_team_runner_is_told_the_run_s_plan_and_a_stale_output_never_passes(tm
     from desk import DeskError
     with pytest.raises(DeskError):                    # out.json from before must not count as this run's
         engines._run(Path(sys.executable), tmp_path, [failing], out, tmp_path / "log.txt", 60, "x", lambda *_: None)
+
+
+@pytest.mark.parametrize("name,value", [("TRADINGAGENTS_MAX_DEBATE_ROUNDS", "3"),
+                                        ("TRADINGAGENTS_MAX_RISK_DISCUSS_ROUNDS", "2"),
+                                        ("TRADINGAGENTS_OUTPUT_LANGUAGE", "Spanish")])
+def test_any_research_setting_change_reruns_the_quant_desk(monkeypatch, name, value):
+    # Codex F2: these were outside a hand-kept list, so a deeper run silently reused a shallow one.
+    monkeypatch.delenv(name, raising=False)
+    before = prov.expected("quant", "claude", "2026-10-06")
+    monkeypatch.setenv(name, value)
+    assert prov.differs(before, prov.expected("quant", "claude", "2026-10-06")) == "its research settings differs"
+
+
+def test_secrets_and_output_locations_are_not_part_of_the_inputs(monkeypatch):
+    monkeypatch.setenv("TRADINGAGENTS_RESULTS_DIR", "/tmp/a")
+    monkeypatch.setenv("HEDGE_FUND_API_KEY", "sk-not-recorded")
+    monkeypatch.setenv("EDGE_DESK_VAULT_DIR", "/vault")
+    recorded = str([prov.expected(e, "claude", "2026-10-06", "test-2") for e in ("quant", "vets", "edge")])
+    assert "sk-not-recorded" not in recorded and "/tmp/a" not in recorded and "/vault" not in recorded
+
+
+def test_an_edge_setting_blanked_in_its_own_file_is_not_inherited(monkeypatch):
+    monkeypatch.setenv("EDGE_DESK_EFFORT", "high")
+    prov.EDGE_ENV.write_text("EDGE_DESK_EFFORT=\n", encoding="utf-8")
+    assert "EDGE_DESK_EFFORT" not in prov.expected("edge", "claude", "2026-10-06")["settings"]
+
+
+def test_source_identity_is_the_content_not_git(tmp_path):
+    # Codex F3: a ZIP install has no git history, so HEAD was None on both sides and always "matched".
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "a.py").write_text("x = 1\n", encoding="utf-8")
+    (pkg / "tests").mkdir()
+    (pkg / "tests" / "t.py").write_text("ignored\n", encoding="utf-8")
+    one = REAL_DIGEST(pkg)
+    (pkg / "tests" / "t.py").write_text("still ignored\n", encoding="utf-8")
+    assert REAL_DIGEST(pkg) == one
+    (pkg / "a.py").write_bytes(b"x = 1\r\n")                  # a CRLF checkout is the same code
+    assert REAL_DIGEST(pkg) == one
+    (pkg / "a.py").write_text("x = 2\n", encoding="utf-8")     # an uncommitted edit is not
+    assert REAL_DIGEST(pkg) != one
+    assert REAL_DIGEST(tmp_path / "missing") is None
+
+
+def test_unknown_source_refuses_reuse_even_when_both_sides_are_unknown(monkeypatch):
+    monkeypatch.setattr(prov, "source_digest", lambda folder: None)
+    a = prov.expected("edge", "claude", "2026-10-06")
+    assert "cannot be read" in prov.differs(a, prov.expected("edge", "claude", "2026-10-06"))

@@ -19,7 +19,7 @@ from desk.config import (AIHF_DIR, AIHF_PYTHON, AIHF_TIMEOUT_SECONDS, EDGE_DIR, 
                          EDGE_TIMEOUT_SECONDS, RUNNERS_DIR, TA_DIR, TA_PYTHON,
                          TA_REPORT_FILES, TA_TIMEOUT_SECONDS)
 from desk.events import EventLog
-from desk.procs import kill_tree, tree_kwargs
+from desk.procs import kill_tree, register, tree_kwargs, unregister
 from desk.ratings import normalize
 
 _RATING_RE = re.compile(r"\*\*Rating\*\*:\s*\**\s*([A-Za-z]+)")
@@ -184,11 +184,16 @@ def _run(python: Path, cwd: Path, args: list, out: Path, log: Path, timeout: int
         # subprocess.run's timeout kills only the runner and leaves them spending the plan.
         proc = subprocess.Popen([str(python), *map(str, args)], cwd=cwd, env=env,
                                 stdout=log_file, stderr=subprocess.STDOUT, **tree_kwargs())
+        # Its own group is outside the desk's, so the run folder records it while it is alive:
+        # cancelling the run stops it through that record (desk/procs.py).
+        register(log.parent, proc)
         try:
             proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired as exc:
             kill_tree(proc)
             raise DeskError(f"{name} timed out after {timeout // 60} minutes (log: {log})") from exc
+        finally:
+            unregister(log.parent, proc)
     if proc.returncode != 0 or not out.exists():
         tail = "\n".join(log.read_text(encoding="utf-8", errors="replace").splitlines()[-15:])
         raise DeskError(f"{name} failed (exit {proc.returncode}). Last log lines:\n{tail}")

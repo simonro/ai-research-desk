@@ -48,7 +48,14 @@ ISOLATION = ["--tools", "", "--setting-sources", "", "--strict-mcp-config", "--n
 # Pinned, not inherited. Without --model, `claude -p` runs on the user's own Claude Code default
 # (settings.json said "sonnet" on 2026-09-24), so changing that for everyday coding would
 # silently change the model behind every report in the middle of a forward test.
-MODEL = os.environ.get("EDGE_DESK_MODEL", "claude-sonnet-5")
+MODEL = "claude-sonnet-5"
+
+
+def current_model() -> str:
+    """EDGE_DESK_MODEL as set when the call is made, else MODEL. Read per call, not at import:
+    the desk's Edge runner imports this module before Edge's own settings file is loaded, and a
+    value frozen at import would run one model while the report records another."""
+    return os.environ.get("EDGE_DESK_MODEL") or MODEL
 
 try:
     from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
@@ -121,7 +128,7 @@ async def _get_client():
                 setting_sources=[],
                 mcp_servers={},
                 strict_mcp_config=True,
-                model=MODEL,
+                model=current_model(),
             ))
             await client.connect()
         finally:
@@ -188,7 +195,7 @@ async def _ask_cold(prompt: str, timeout: int, model: str | None) -> tuple[bool,
     had been chopped at the first thing cmd decided to interpret. Piping is both
     safe and unlimited.
     """
-    cmd = [*_invocation(), "-p", *ISOLATION, "--output-format", "json", "--model", model or MODEL]
+    cmd = [*_invocation(), "-p", *ISOLATION, "--output-format", "json", "--model", model or current_model()]
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd, cwd=_HOME, env=child_env(),
@@ -249,7 +256,7 @@ async def _ask_chatgpt(prompt: str, timeout: int, model: str | None) -> tuple[bo
     from edgedesk.llm import chatgpt
     try:
         r = await asyncio.to_thread(chatgpt.run, prompt, "Answer from the material given, in the shape asked.",
-                                    chatgpt.model_for(model or MODEL), None, None, timeout)
+                                    chatgpt.model_for(model or current_model()), None, None, timeout)
     except chatgpt.ChatGPTError as exc:
         return False, str(exc)
     if r["stray"]:

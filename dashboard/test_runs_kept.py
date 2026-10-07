@@ -83,3 +83,50 @@ def test_levels_show_computed_withheld_and_unchecked():
     assert any(f["kind"] == "levels_unchecked" for f in flags)
     del h["memo"]["levels"]["first_target"]
     assert not any(f["kind"] == "levels_unchecked" for f in runview.run_flags({"horizons": {"swing": h}}, None, None, []))
+
+
+def test_a_rerun_keeps_the_day_s_result_saved_before_run_ids(memos, monkeypatch):
+    """Codex F5: the first new-style run of a day used to replace an old-style result for good."""
+    from desk import render
+    monkeypatch.setattr(render, "markdown", lambda b: f"memo for {b.get('run_id') or 'legacy'}")
+    legacy = _bundle(None, "09:05", "Hold")
+    del legacy["run_id"]
+    _save_run(memos, legacy, pointer=True)
+    (memos / "DEMO-2026-10-07.md").write_text("the legacy memo", encoding="utf-8")
+    (memos / "runs" / "DEMO-2026-10-07" / "edge-desk.json").write_text('{"rating": "Hold"}', encoding="utf-8")
+
+    new = _bundle("143000-bbbbbb", "14:30", "Sell", "chatgpt")
+    run_dir = memos / "runs" / "DEMO-2026-10-07-143000-bbbbbb"
+    run_dir.mkdir()
+    (run_dir / "bars.json").write_text("[]", encoding="utf-8")
+    render.write_all(new, memos, to_vault=False, say=lambda *_: None, run_dir=run_dir)
+
+    kept = memos / "runs" / "DEMO-2026-10-07-090500-000000"
+    assert (kept / "memo.md").read_text(encoding="utf-8") == "the legacy memo"
+    assert (kept / "edge-desk.json").exists()                     # its team report came along
+    latest = runview.build("DEMO", "2026-10-07")
+    assert latest["run_id"] == "143000-bbbbbb"
+    assert [h["run_id"] for h in latest["history"]] == ["090500-000000"]
+    old = runview.build("DEMO", "2026-10-07", "090500-000000")
+    assert old["edge"]["rating"] == "Hold" and old["memo_md"] == "the legacy memo" and not old["latest"]
+    # Idempotent: archiving again changes nothing.
+    assert render.archive_legacy(memos, "DEMO-2026-10-07") is None
+
+
+def test_a_failed_archive_leaves_the_old_result_as_the_day_s(memos, monkeypatch):
+    from desk import render
+    monkeypatch.setattr(render, "markdown", lambda b: "new memo")
+    legacy = _bundle(None, "09:05", "Hold")
+    del legacy["run_id"]
+    _save_run(memos, legacy, pointer=True)
+
+    def broken(*a, **k):
+        raise OSError("disk full")
+    monkeypatch.setattr(render.shutil, "copytree", broken)
+    run_dir = memos / "runs" / "DEMO-2026-10-07-143000-bbbbbb"
+    run_dir.mkdir()
+    render.write_all(_bundle("143000-bbbbbb", "14:30", "Sell"), memos, to_vault=False, say=lambda *_: None,
+                     run_dir=run_dir)
+    assert "run_id" not in json.loads((memos / "DEMO-2026-10-07.json").read_text(encoding="utf-8"))
+    assert (run_dir / "memo.json").exists()                     # the new run is still saved
+    assert not list((memos / "runs").glob("*.tmp"))

@@ -88,6 +88,8 @@ def _owned(tickers: list[str], own_flag: list[str] | None) -> dict[str, bool]:
 
 
 def run_one(ticker: str, owns: bool, args) -> None:
+    from desk.procs import stop_runners_on_term
+    stop_runners_on_term()                  # a cancelled desk stops its teams before it exits
     from desk.debate import DESKS
     from desk.engines import run_selected
     from desk.events import EventLog

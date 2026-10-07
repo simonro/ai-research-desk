@@ -47,7 +47,7 @@ from urllib.parse import parse_qs, urlparse
 import symbol_card as symbol
 import runview
 import validate
-from desk.procs import kill_tree, tree_kwargs   # runview put the desk package on the path
+from desk.procs import kill_tree, owned, tree_kwargs   # runview put the desk package on the path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
@@ -151,9 +151,10 @@ def cancel_run(rid: str) -> dict:
         run = RUNS.get(rid)
     if not run:
         return {"error": "This run is not known to the server."}
-    # The whole tree even when the desk itself already exited: on Mac and Linux its teams are in
-    # its process group and can outlive it. Windows stops the tree while the desk is alive.
-    kill_tree(run["proc"])
+    # The desk's tree and every team runner the run folder records as alive. Each runner heads its
+    # own group (so one team can time out alone), which takes it out of the desk's tree on Mac and
+    # Linux; the record reaches it even when the desk itself already died.
+    kill_tree(run["proc"], groups=owned(run["run_dir"]))
     run["cancelled"] = True
     print(f"[desk] cancelled {run['ticker']} ({rid})")
     return {"ok": True, "ticker": run["ticker"]}

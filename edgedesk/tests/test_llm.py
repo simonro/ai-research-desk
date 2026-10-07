@@ -69,11 +69,29 @@ def test_the_model_is_pinned_not_inherited_from_the_users_claude_default(monkeyp
         raise OSError("stop here: only the command matters")
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    monkeypatch.delenv("EDGE_DESK_MODEL", raising=False)
     asyncio.run(headless._ask_cold("hi", 5, None))
     assert seen["cmd"][seen["cmd"].index("--model") + 1] == headless.MODEL == "claude-sonnet-5"
     asyncio.run(headless._ask_cold("hi", 5, "claude-opus-5-5"))
     assert seen["cmd"][seen["cmd"].index("--model") + 1] == "claude-opus-5-5"   # a caller's choice wins
-    assert "model=MODEL" in inspect.getsource(headless._get_client)            # the warm path too
+    assert "model=current_model()" in inspect.getsource(headless._get_client)  # the warm path too
+
+
+def test_a_model_set_after_import_is_the_one_called(monkeypatch):
+    """The desk's runner imports this module, then loads Edge's own settings file. The model
+    named there must be the one on the command line, as the report records it (Codex F4)."""
+    import asyncio
+
+    seen = {}
+
+    async def fake_exec(*cmd, **kw):
+        seen["cmd"] = list(cmd)
+        raise OSError("stop here: only the command matters")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    monkeypatch.setenv("EDGE_DESK_MODEL", "claude-own-file-model")
+    asyncio.run(headless._ask_cold("hi", 5, None))
+    assert seen["cmd"][seen["cmd"].index("--model") + 1] == "claude-own-file-model" == headless.current_model()
 
 
 def test_every_cold_call_is_isolated_from_tools_settings_and_mcp(monkeypatch):
