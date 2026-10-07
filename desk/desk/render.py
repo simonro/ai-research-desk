@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 from datetime import datetime
 from pathlib import Path
@@ -206,9 +207,16 @@ def write_all(bundle: dict, memos_dir: Path, to_vault: bool, say=print, run_dir:
     if run_dir is not None:
         _replace(run_dir / "memo.md", memo_md)
         _replace(run_dir / "memo.json", json.dumps(bundle, indent=2))
+    paths = {"markdown": md_path, "json": json_path}
+    try:
+        archive_legacy(memos_dir, stem)
+    except OSError as exc:
+        # The day's earlier result could not be kept, so it stays the day's result; this run is
+        # saved in its own folder and opens from there.
+        say(f"  Could not archive the earlier {stem} memo ({exc}); it stays as the day's result.")
+        return {"markdown": run_dir / "memo.md", "json": run_dir / "memo.json"} if run_dir else paths
     _replace(md_path, memo_md)
     _replace(json_path, json.dumps(bundle, indent=2))
-    paths = {"markdown": md_path, "json": json_path}
     if to_vault and VAULT_MEMOS_DIR:
         VAULT_MEMOS_DIR.mkdir(parents=True, exist_ok=True)
         note = VAULT_MEMOS_DIR / f"{bundle['date']} {bundle['ticker']} desk memo.md"
@@ -216,6 +224,45 @@ def write_all(bundle: dict, memos_dir: Path, to_vault: bool, say=print, run_dir:
         paths["vault"] = note
         _reindex_vault(say)
     return paths
+
+
+LEGACY_SUFFIX = "000000"                    # run ids end in 6 hex digits; zeros mark an archived old run
+
+
+def archive_legacy(memos_dir: Path, stem: str) -> str | None:
+    """Before a new run replaces memos/STEM.json, keep a day's result saved before runs had ids.
+
+    It moves, as a copy, into memos/runs/STEM-HHMMSS-000000/ (memo.json with that run id, memo.md,
+    and the old run folder's team reports, events and bars), so it opens like any other run of
+    the day. Idempotent, and the folder appears in one rename, so a failure leaves no half copy
+    and the old pointer untouched. Returns the run id, or None when there was nothing to keep."""
+    old_json = memos_dir / f"{stem}.json"
+    try:
+        old = json.loads(old_json.read_text(encoding="utf-8")) if old_json.exists() else None
+    except json.JSONDecodeError:
+        old = None
+    if not old or old.get("run_id"):
+        return None
+    hhmmss = (old.get("generated_at") or "")[11:19].replace(":", "")
+    rid = f"{hhmmss if len(hhmmss) == 6 and hhmmss.isdigit() else '000000'}-{LEGACY_SUFFIX}"
+    dest = memos_dir / "runs" / f"{stem}-{rid}"
+    if (dest / "memo.json").exists():
+        return rid
+    tmp = dest.with_name(dest.name + ".tmp")
+    if tmp.exists():
+        shutil.rmtree(tmp)
+    legacy_dir = memos_dir / "runs" / stem
+    if legacy_dir.is_dir():
+        shutil.copytree(legacy_dir, tmp)
+    else:
+        tmp.mkdir(parents=True)
+    (tmp / "memo.json").write_text(json.dumps({**old, "run_id": rid, "archived_from": f"{stem}.json"}, indent=2),
+                                   encoding="utf-8")
+    old_md = memos_dir / f"{stem}.md"
+    if old_md.exists():
+        shutil.copy2(old_md, tmp / "memo.md")
+    os.replace(tmp, dest)
+    return rid
 
 
 def _replace(path: Path, text: str) -> None:

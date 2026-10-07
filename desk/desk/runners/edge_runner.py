@@ -50,6 +50,14 @@ def _plan() -> str:
     return headless.plan() if hasattr(headless, "plan") else "claude"
 
 
+def _model() -> str | None:
+    from edgedesk.llm import headless
+    if _plan() == "chatgpt":
+        from edgedesk.llm import chatgpt
+        return chatgpt.model_for(headless.current_model())
+    return headless.current_model() if hasattr(headless, "current_model") else getattr(headless, "MODEL", None)
+
+
 def section_events(events):
     """Edge reports each written section's real outcome as it finishes (audit R2-17). The desk
     used to mark a section "Written" when the next one started, whatever had happened."""
@@ -175,6 +183,8 @@ def main() -> None:
         "seconds": round(time.time() - started),
         "usage": {"billing": "chatgpt" if _plan() == "chatgpt" else "max", "usd": 0.0,
                   "usage_limited": llm.get("usage_limited")},
+        # The model the call layer actually used, so a report never claims another one.
+        "model": _model(),
         "reused": False,
     }
     out.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
