@@ -23,6 +23,7 @@ Failure contract (locked decisions):
 from __future__ import annotations
 
 import logging
+import re
 
 from hedge_fund.data.protocol import DataClient
 from hedge_fund.features.snapshot import FundamentalsSnapshot, InsufficientData, build_snapshot
@@ -86,10 +87,30 @@ class LLMAgent(AlphaModel):
         try:
             parsed = self._parse(response)
         except Exception as exc:
-            # Persist the raw response even when unparseable — the debug trail.
-            self._cache.put(key, {**record, "parse_error": str(exc)})
-            logger.warning("%s parse failed for %s@%s: %s", self.name, ticker, date, exc)
-            return self._abstain(ticker, date, f"parse failed: {exc}")
+            # The answer is in there but is not valid JSON (an unescaped quote, a cut-off end):
+            # keep the call the persona plainly stated rather than throw its vote away, then ask
+            # once more, and only then abstain. Every unparsed answer is kept in full.
+            logger.warning("%s parse failed for %s@%s: %s\n--- full response ---\n%s",
+                           self.name, ticker, date, exc, response)
+            parsed = self._salvage(response)
+            if parsed is None:
+                try:
+                    retry = self._llm.complete(system, user)
+                except Exception as exc2:
+                    self._cache.put(key, {**record, "parse_error": str(exc)})
+                    return self._abstain(ticker, date, f"parse failed, retry call failed: {exc2}")
+                record = {**record, "unparsed_response": response, "response": retry}
+                try:
+                    parsed = self._parse(retry)
+                except Exception as exc2:
+                    logger.warning("%s retry parse failed for %s@%s: %s\n--- full response ---\n%s",
+                                   self.name, ticker, date, exc2, retry)
+                    parsed = self._salvage(retry)
+                if parsed is None:
+                    self._cache.put(key, {**record, "parse_error": str(exc)})
+                    return self._abstain(ticker, date, f"parse failed twice: {exc}")
+            else:
+                record = {**record, "parse_repaired": True}
 
         self._cache.put(key, {**record, "parsed": parsed})
         return self._to_signal(ticker, date, parsed, key, snapshot, cached=False)
@@ -118,6 +139,20 @@ class LLMAgent(AlphaModel):
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    def _salvage(self, response: str) -> dict | None:
+        """{signal, confidence, reasoning} from an answer that is not valid JSON, when its signal
+        and confidence are stated exactly once and unambiguously; None otherwise."""
+        signals = set(re.findall(r'"signal"\s*:\s*"(bullish|bearish|neutral)"', response, re.I))
+        confidences = re.findall(r'"confidence"\s*:\s*(\d+(?:\.\d+)?)', response)
+        if len(signals) != 1 or len(set(confidences)) != 1:
+            return None
+        confidence = float(confidences[0])
+        if not 0 <= confidence <= 100:
+            return None
+        reasoning = re.search(r'"reasoning"\s*:\s*"(.*)', response, re.S)
+        text = reasoning.group(1).rstrip().rstrip("}").rstrip().rstrip('"') if reasoning else ""
+        return {"signal": signals.pop().lower(), "confidence": confidence, "reasoning": text}
 
     def _parse(self, response: str) -> dict:
         """Extract + validate {signal, confidence, reasoning}."""

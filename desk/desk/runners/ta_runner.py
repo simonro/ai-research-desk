@@ -34,6 +34,7 @@ from tradingagents.graph.trading_graph import TradingAgentsGraph  # noqa: E402
 import tradingagents.graph.trading_graph as _ta_graph  # noqa: E402
 
 from desk import maxplan  # noqa: E402
+from desk import chatgpt as _chatgpt  # noqa: E402
 
 if maxplan.enabled():
     # TradingAgents builds both of its models (deep: Research Manager + Portfolio Manager,
@@ -141,7 +142,9 @@ def main() -> None:
         "ticker": ticker,
         "date": as_of,
         "rating": rating,
-        "models": {"deep": config["deep_think_llm"], "quick": config["quick_think_llm"]},
+        # The models that answered: on the ChatGPT plan the configured Claude ids are mapped.
+        "models": {k: (_chatgpt.model_for(v) if maxplan.plan() == "chatgpt" else v)
+                   for k, v in (("deep", config["deep_think_llm"]), ("quick", config["quick_think_llm"]))},
         "reports": {**{key: state.get(key) or "" for key in REPORT_KEYS}, **debate_reports(state)},
         "seconds": round(time.time() - started),
         "usage": maxplan.summary() if maxplan.enabled() else usage_meter.summary(),

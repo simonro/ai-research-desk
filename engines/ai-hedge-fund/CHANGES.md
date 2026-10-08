@@ -11,5 +11,9 @@ This folder is a snapshot of [virattt/ai-hedge-fund](https://github.com/virattt/
   research manager's written view, with data caveats such as stale fundamentals.
 - **Caching:** entries reaching today expire after six hours, so new filings are seen.
 - **Strategy:** `street-consensus`.
+- **Persona answers that are not clean JSON** are still read: a lenient decoder (raw line breaks,
+  braces inside the reasoning), the stated signal and confidence kept when they are unambiguous, then one
+  retry before abstaining. When an analyst sits in several strategies, a call with a view wins over an
+  abstention in the per-ticker verdict.
 - **Backtest entry points** removed from the TUI and CLI: LLM backtests before a model's training
   cutoff are look-ahead biased, so the desk is forward-tested only.
