@@ -33,6 +33,16 @@ from hedge_fund.signals.base import AlphaModel
 
 logger = logging.getLogger(__name__)
 
+# What every persona answers with. Clients that support it (complete_json) are held to it.
+SIGNAL_SCHEMA = {
+    "type": "object",
+    "properties": {"signal": {"type": "string", "enum": ["bullish", "bearish", "neutral"]},
+                   "confidence": {"type": "number", "description": "0 to 100"},
+                   "reasoning": {"type": "string"}},
+    "required": ["signal", "confidence", "reasoning"],
+    "additionalProperties": False,
+}
+
 # What the model must return; folded into Signal.value below.
 _SIGNAL_TO_SIGN = {"bullish": 1.0, "neutral": 0.0, "bearish": -1.0}
 
@@ -68,7 +78,7 @@ class LLMAgent(AlphaModel):
             return self._to_signal(ticker, date, cached["parsed"], key, snapshot, cached=True)
 
         try:
-            response = self._llm.complete(system, user)
+            response = self._ask(system, user)
         except Exception as exc:
             logger.warning("%s LLM call failed for %s@%s: %s", self.name, ticker, date, exc)
             return self._abstain(ticker, date, f"LLM call failed: {exc}")
@@ -95,7 +105,7 @@ class LLMAgent(AlphaModel):
             parsed = self._salvage(response)
             if parsed is None:
                 try:
-                    retry = self._llm.complete(system, user)
+                    retry = self._ask(system, user)
                 except Exception as exc2:
                     self._cache.put(key, {**record, "parse_error": str(exc)})
                     return self._abstain(ticker, date, f"parse failed, retry call failed: {exc2}")
@@ -139,6 +149,12 @@ class LLMAgent(AlphaModel):
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    def _ask(self, system: str, user: str) -> str:
+        """A client that can hold the reply to a schema (the desk's subscription client) is asked
+        that way, so the answer is valid JSON by construction; any other client is asked plainly."""
+        structured = getattr(self._llm, "complete_json", None)
+        return structured(system, user, SIGNAL_SCHEMA) if structured else self._llm.complete(system, user)
 
     def _salvage(self, response: str) -> dict | None:
         """{signal, confidence, reasoning} from an answer that is not valid JSON, when its signal

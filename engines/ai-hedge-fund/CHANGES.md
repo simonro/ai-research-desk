@@ -15,5 +15,7 @@ This folder is a snapshot of [virattt/ai-hedge-fund](https://github.com/virattt/
   braces inside the reasoning), the stated signal and confidence kept when they are unambiguous, then one
   retry before abstaining. When an analyst sits in several strategies, a call with a view wins over an
   abstention in the per-ticker verdict.
+- **Structured persona answers:** a client that offers `complete_json` (the desk's subscription
+  client) is asked with the signal schema, so an answer cannot stop mid-JSON.
 - **Backtest entry points** removed from the TUI and CLI: LLM backtests before a model's training
   cutoff are look-ahead biased, so the desk is forward-tested only.

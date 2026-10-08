@@ -302,3 +302,17 @@ def test_a_view_in_one_strategy_beats_an_abstention_in_another():
                   metadata={"signal": "bearish", "confidence": 68})
     record = SimpleNamespace(strategies=[SimpleNamespace(signals=[lost]), SimpleNamespace(signals=[kept])])
     assert distinct_signals(record, "T") == [kept]
+
+
+def test_a_client_that_can_hold_a_schema_is_asked_with_it(tmp_path):
+    from hedge_fund.signals.llm_agent import SIGNAL_SCHEMA
+
+    class StructuredLLM(FakeLLM):
+        def complete_json(self, system, user, schema):
+            self.calls += 1
+            self.schema = schema
+            return '{"signal": "bearish", "confidence": 70, "reasoning": "held to the schema"}'
+
+    llm = StructuredLLM()
+    sig = _agent(tmp_path, llm).predict("TEST", "2025-01-15", MockDataClient(metrics=_history()))
+    assert llm.schema is SIGNAL_SCHEMA and sig.value == pytest.approx(-0.7) and llm.calls == 1

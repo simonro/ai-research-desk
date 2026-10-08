@@ -51,6 +51,12 @@ class MaxLLM:
     def complete(self, system: str, user: str) -> str:
         return maxplan.ask(user, system, self.model, self.effort).text
 
+    def complete_json(self, system: str, user: str, schema: dict) -> str:
+        """The same call with the reply held to `schema` by the CLI (--json-schema on Claude, a
+        strict schema on ChatGPT), so an answer cannot stop mid-JSON. Returned as JSON text, so
+        the caller's own parsing and checks run unchanged."""
+        return json.dumps(maxplan.ask(user, system, self.model, self.effort, schema=schema).data)
+
 
 def _max_make_llm(model=None, timeout=60.0, max_tokens=4096, on_token=None):
     import os
