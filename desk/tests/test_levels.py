@@ -78,3 +78,25 @@ def test_the_pipeline_stores_computed_levels_and_markdown_shows_withheld_ones():
     md = markdown(bundle)
     assert "| Trim / take profit | Withheld | No computed level supports it. made up |" in md
     assert "| Stop / thesis break | 101.25 |" in md and "987654" not in md
+
+
+def test_levels_that_contradict_each_other_are_withheld():
+    shared = {"anchors": {"last_close": 258.45, "low_20d": 251.17, "high_52w": 280.0, "atr_14": 4.0},
+              "valuation": {"own_history": {"fair_low": 155.39, "fair_mid": 202.90, "fair_high": 230.0},
+                            "street": {"target_low": 168.99, "target_mean": 279.64, "target_high": 320.0}}}
+    out = resolve_levels({"entry_zone": lv("fair_low", range_to="fair_mid"), "stop": lv("street_low"),
+                          "first_target": lv("street_mean"), "trim": lv("street_high")}, shared)
+    assert out["stop"]["status"] == "withheld" and "not below the entry zone" in out["stop"]["why"]
+    assert out["first_target"]["status"] == "checked" and out["trim"]["status"] == "checked"
+    bad = resolve_levels({"entry_zone": lv("last_close"), "stop": lv("low_20d"), "first_target": lv("fair_mid"),
+                          "trim": lv("street_low")}, shared)
+    assert bad["stop"]["status"] == "checked"
+    assert bad["first_target"]["status"] == "withheld"
+    assert bad["trim"]["status"] == "withheld" and "not above the entry zone" in bad["trim"]["why"]
+
+
+def test_ordering_is_only_checked_between_computed_levels():
+    shared = {"anchors": {"last_close": 100.0, "low_20d": 95.0}}
+    out = resolve_levels({"entry_zone": lv("none"), "stop": lv("last_close"), "first_target": lv("low_20d"),
+                          "trim": lv("none")}, shared)
+    assert out["stop"]["status"] == "checked" and out["first_target"]["status"] == "checked"

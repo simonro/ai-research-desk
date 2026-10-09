@@ -298,6 +298,25 @@ def test_an_uncited_figure_is_retried_with_the_figure_named(run, monkeypatch):
     assert "61.4%" in calls["prompts"][1]
 
 
+def test_an_unsourced_figure_twice_drops_only_its_sentences(run, monkeypatch):
+    """JNJ 2026-10-08 lost its whole synthesis over one "106%": the rest was checked text."""
+    bad = json.dumps({"case": "Margins are strong. Payout reached 106% last year.",
+                      "points": ["Point one.", "Point two.", "Payout of 106% is high."],
+                      "what_would_disprove_it": "Margins falling."})
+    ask, calls = _stub([bad, bad])
+    monkeypatch.setattr(headless, "ask", ask)
+    section = analysis._call("prompt", prompts.CASE_SCHEMA, run, "bull")
+    assert section.ok and section.attempts == 2 and section.uncited == ["106%"]
+    assert section.data["case"] == "Margins are strong." and section.data["points"] == ["Point one.", "Point two."]
+
+
+def test_an_unsourced_figure_in_every_sentence_still_drops_the_section(run, monkeypatch):
+    bad = json.dumps({"case": "Payout reached 106%.", "points": ["a", "b"], "what_would_disprove_it": "x"})
+    ask, _ = _stub([bad, bad])
+    monkeypatch.setattr(headless, "ask", ask)
+    assert not analysis._call("prompt", prompts.CASE_SCHEMA, run, "bull").ok
+
+
 def test_two_failures_drop_the_section_rather_than_publishing_it(run, monkeypatch):
     ask, _ = _stub(['{"nope": 1}'])
     monkeypatch.setattr(headless, "ask", ask)

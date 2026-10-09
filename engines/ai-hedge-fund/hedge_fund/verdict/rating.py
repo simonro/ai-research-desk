@@ -39,11 +39,15 @@ def has_view(signal: Signal) -> bool:
 
 
 def distinct_signals(record: CycleRecord, ticker: str) -> list[Signal]:
-    """Each analyst's call on *ticker* once, in the order the report lists them."""
+    """Each analyst's call on *ticker* once, in the order the report lists them. When the same
+    analyst appears in several strategies, a call with a view wins over an abstention, so a
+    failure in one strategy cannot hide the answer the analyst gave in another."""
     seen: dict[str, Signal] = {}
     for sr in record.strategies:
         for s in sr.signals:
-            if s.ticker == ticker and s.model_name not in seen:
+            if s.ticker != ticker:
+                continue
+            if s.model_name not in seen or (not has_view(seen[s.model_name]) and has_view(s)):
                 seen[s.model_name] = s
     return list(seen.values())
 

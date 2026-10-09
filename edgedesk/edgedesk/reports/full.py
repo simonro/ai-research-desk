@@ -413,6 +413,10 @@ def _written(run: dict) -> list[str]:
         out += ["### Synthesis", ""] + ([f"**{partial}**, so this synthesis is one-sided.", ""]
                                         if partial else []) + [synth["thesis"], "",
                 "**Strongest counterargument:** " + synth["strongest_counterargument"], ""]
+        removed = ((llm.get("sections") or {}).get("synthesis") or {}).get("uncited") or []
+        if removed:
+            out += [f"_Sentences quoting figures the evidence does not hold ({', '.join(removed)}) were "
+                    "removed after a repair failed to source them._", ""]
         if synth.get("unresolved"):
             out += ["**Unresolved:** " + synth["unresolved"], ""]
         if synth.get("what_would_change_it"):

@@ -190,33 +190,32 @@ def _require_key(provider: str) -> str:
 def extract_json(text: str) -> dict:
     """Pull the first JSON object out of an LLM response.
 
-    Tries: ```json fence -> whole string -> first balanced {...} block.
-    Raises LLMParseError if nothing parses.
+    Tries: ```json fence -> whole string -> a JSON object starting at each "{" in turn.
+    Raw line breaks and tabs inside strings are accepted (strict=False): models write them
+    in long reasoning, and rejecting the whole answer for one cost Veterans votes on
+    AKAM 2026-10-07. Raises LLMParseError if nothing parses.
     """
+    decoder = json.JSONDecoder(strict=False)
     fence = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
     if fence:
         try:
-            return json.loads(fence.group(1))
+            return decoder.decode(fence.group(1))
         except json.JSONDecodeError:
             pass
 
     try:
-        return json.loads(text.strip())
+        return decoder.decode(text.strip())
     except json.JSONDecodeError:
         pass
 
-    start = text.find("{")
-    if start != -1:
-        depth = 0
-        for i, ch in enumerate(text[start:], start):
-            if ch == "{":
-                depth += 1
-            elif ch == "}":
-                depth -= 1
-                if depth == 0:
-                    try:
-                        return json.loads(text[start : i + 1])
-                    except json.JSONDecodeError:
-                        break
+    # raw_decode reads one object and ignores what follows, and it is string-aware, so a brace
+    # inside the reasoning text cannot end the object early (the old depth count could).
+    for match in re.finditer(r"\{", text):
+        try:
+            obj, _end = decoder.raw_decode(text, match.start())
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict):
+            return obj
 
     raise LLMParseError(f"no JSON object found in response: {text[:200]!r}")

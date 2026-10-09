@@ -241,3 +241,78 @@ def test_extract_json_embedded():
 def test_extract_json_raises_on_garbage():
     with pytest.raises(LLMParseError):
         extract_json("no json here at all")
+
+
+# ---------------------------------------------------------------------------
+# Answers that are not clean JSON (AKAM 2026-10-07: three bearish votes were lost)
+# ---------------------------------------------------------------------------
+
+class SequenceLLM(FakeLLM):
+    def __init__(self, responses):
+        super().__init__()
+        self._responses = list(responses)
+
+    def complete(self, system, user):
+        self.calls += 1
+        return self._responses.pop(0)
+
+
+def test_a_raw_line_break_in_the_reasoning_still_parses(tmp_path):
+    raw = '{"signal": "bearish", "confidence": 68, "reasoning": "Margins slid from 23% to 11%.\nDebt doubled."}'
+    llm = FakeLLM(raw)
+    sig = _agent(tmp_path, llm).predict("TEST", "2025-01-15", MockDataClient(metrics=_history()))
+    assert sig.value == pytest.approx(-0.68) and llm.calls == 1
+
+
+def test_a_brace_inside_the_reasoning_does_not_end_the_object():
+    text = 'Here: {"signal": "neutral", "confidence": 50, "reasoning": "a {curly} aside"} trailing'
+    assert extract_json(text)["reasoning"] == "a {curly} aside"
+
+
+def test_an_unescaped_quote_keeps_the_stated_call_without_a_second_call(tmp_path):
+    raw = '{"signal": "bearish", "confidence": 72, "reasoning": "He called it a "melting ice cube" and meant it"}'
+    llm = FakeLLM(raw)
+    sig = _agent(tmp_path, llm).predict("TEST", "2025-01-15", MockDataClient(metrics=_history()))
+    assert sig.value == pytest.approx(-0.72) and llm.calls == 1
+    assert "melting ice cube" in sig.reasoning
+
+
+def test_an_unreadable_answer_is_asked_once_more(tmp_path):
+    llm = SequenceLLM(["I am bearish, no JSON today.",
+                       '{"signal": "bearish", "confidence": 60, "reasoning": "ok"}'])
+    sig = _agent(tmp_path, llm).predict("TEST", "2025-01-15", MockDataClient(metrics=_history()))
+    assert sig.value == pytest.approx(-0.6) and llm.calls == 2
+    record = json.loads(next((tmp_path / "llm").glob("*.json")).read_text())
+    assert record["unparsed_response"] == "I am bearish, no JSON today."
+
+
+def test_an_ambiguous_answer_is_not_salvaged(tmp_path):
+    two_calls = '{"signal": "bullish", "confidence": 60, "signal": "bearish" "confidence": 70}'
+    llm = SequenceLLM([two_calls, two_calls])
+    sig = _agent(tmp_path, llm).predict("TEST", "2025-01-15", MockDataClient(metrics=_history()))
+    assert sig.metadata["abstained"] is True and llm.calls == 2
+
+
+def test_a_view_in_one_strategy_beats_an_abstention_in_another():
+    from types import SimpleNamespace
+    from hedge_fund.verdict.rating import distinct_signals
+    lost = Signal(model_name="munger", ticker="T", date="2026-10-07", value=0.0, reasoning="abstained",
+                  metadata={"abstained": True})
+    kept = Signal(model_name="munger", ticker="T", date="2026-10-07", value=-0.68, reasoning="bearish",
+                  metadata={"signal": "bearish", "confidence": 68})
+    record = SimpleNamespace(strategies=[SimpleNamespace(signals=[lost]), SimpleNamespace(signals=[kept])])
+    assert distinct_signals(record, "T") == [kept]
+
+
+def test_a_client_that_can_hold_a_schema_is_asked_with_it(tmp_path):
+    from hedge_fund.signals.llm_agent import SIGNAL_SCHEMA
+
+    class StructuredLLM(FakeLLM):
+        def complete_json(self, system, user, schema):
+            self.calls += 1
+            self.schema = schema
+            return '{"signal": "bearish", "confidence": 70, "reasoning": "held to the schema"}'
+
+    llm = StructuredLLM()
+    sig = _agent(tmp_path, llm).predict("TEST", "2025-01-15", MockDataClient(metrics=_history()))
+    assert llm.schema is SIGNAL_SCHEMA and sig.value == pytest.approx(-0.7) and llm.calls == 1

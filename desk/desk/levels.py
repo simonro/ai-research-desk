@@ -125,4 +125,25 @@ def resolve_level(raw: dict, shared: dict) -> dict:
 
 
 def resolve_levels(raw_levels: dict, shared: dict) -> dict:
-    return {k: resolve_level((raw_levels or {}).get(k) or {"basis": "none"}, shared) for k in LEVEL_KEYS}
+    out = {k: resolve_level((raw_levels or {}).get(k) or {"basis": "none"}, shared) for k in LEVEL_KEYS}
+    return check_order(out)
+
+
+# A level that contradicts the one it depends on is withheld, not drawn: a stop inside the entry
+# zone (JNJ 2026-10-08 on ChatGPT: entry 155.39 to 202.90, stop 168.99) is no stop at all. The
+# levels describe a long position (entry below, target above), whatever the rating.
+_ORDER = (("stop", "entry_zone", lambda a, b: a["high"] < b["low"], "the stop is not below the entry zone"),
+          ("first_target", "entry_zone", lambda a, b: a["low"] > b["high"], "the first target is not above the entry zone"),
+          ("trim", "first_target", lambda a, b: a["low"] >= b["high"], "the trim level is below the first target"),
+          # With no first target to check against, the trim level must still clear the entry.
+          ("trim", "entry_zone", lambda a, b: a["low"] > b["high"], "the trim level is not above the entry zone"))
+
+
+def check_order(levels: dict) -> dict:
+    out = dict(levels)
+    for key, ref, ok, why in _ORDER:
+        a, b = out.get(key) or {}, out.get(ref) or {}
+        if a.get("status") == "checked" and b.get("status") == "checked" and not ok(a, b):
+            out[key] = {"price": "Withheld", "reason": a.get("reason", ""), "status": "withheld",
+                        "why": f"{why[0].upper()}{why[1:]} ({a['price']} against {b['price']})"}
+    return out

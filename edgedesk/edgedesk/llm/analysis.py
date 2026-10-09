@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from edgedesk.verdict.published import published
 import logging
+import re
 from datetime import datetime, timezone
 
 from edgedesk.llm import citations, headless, prompts, research, schema
@@ -80,6 +81,7 @@ def _call(prompt: str, spec: dict, run: dict, name: str,
     retries is how a batch job turns into an hour.
     """
     attempt, complaint, current = 0, None, prompt
+    last_uncited = None                    # (reply, figures) when the last miss was only citations
     while attempt < 2:
         attempt += 1
         ok, text = headless.ask(current, timeout=timeout)
@@ -99,6 +101,7 @@ def _call(prompt: str, spec: dict, run: dict, name: str,
             current = prompts.repair_prompt(prompt, complaint)
             continue
         bad = citations.audit(data, run, fields=list(_PROSE))
+        last_uncited = (data, bad) if bad else None
         if bad:
             complaint = ("these figures do not appear in the evidence: "
                          + ", ".join(bad)
@@ -108,7 +111,46 @@ def _call(prompt: str, spec: dict, run: dict, name: str,
             logger.info("%s: uncited figures %s, retrying", name, bad)
             continue
         return Section(name, data=data, attempts=attempt)
+    if last_uncited:
+        # Twice the same unsourced number (JNJ 2026-10-08 lost its whole synthesis over "106%").
+        # The rest of the reply was checked, so keep it without the sentences that carry the
+        # number, re-audit, and record what was removed. If that leaves a required part empty
+        # or anything still unsourced, the section fails as before.
+        trimmed = _drop_uncited(last_uncited[0], run)
+        try:
+            schema.check(trimmed, spec)
+            if (not _emptied(last_uncited[0], trimmed) and not citations.audit(trimmed, run, fields=list(_PROSE))
+                    and not (extra_check and extra_check(trimmed))):
+                return Section(name, data=trimmed, attempts=attempt, uncited=last_uncited[1])
+        except schema.SchemaError:
+            pass
     return Section(name, error=complaint or "unknown failure", attempts=attempt)
+
+
+_SENTENCE = re.compile(r"(?<=[.!?])\s+")
+
+
+def _emptied(before, after) -> bool:
+    """True when trimming left a text field that had words with none."""
+    if isinstance(before, dict):
+        return any(_emptied(v, after.get(k)) for k, v in before.items())
+    if isinstance(before, str):
+        return bool(before.strip()) and not (after or "").strip()
+    return False
+
+
+def _drop_uncited(node, run: dict, key: str | None = None):
+    """A copy of a reply with every sentence (or list item) quoting an unsourced figure removed,
+    in the prose fields only. A field left empty stays empty, so the schema check rejects it."""
+    if isinstance(node, dict):
+        return {k: _drop_uncited(v, run, k) for k, v in node.items()}
+    if isinstance(node, list):
+        kept = [_drop_uncited(v, run, key) for v in node]
+        return [v for v in kept if not (isinstance(v, str) and key in _PROSE and not v.strip())]
+    if isinstance(node, str) and key in _PROSE:
+        known = citations.known_values(run)
+        return " ".join(s for s in _SENTENCE.split(node) if not citations.uncited(s, run, known)).strip()
+    return node
 
 
 def analyze(run: dict, lenses: tuple[str, ...] | None = None,
