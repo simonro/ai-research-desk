@@ -22,7 +22,7 @@ pick their own stocks and want a second, third and fourth opinion that shows its
 - **Research only.** It never places an order or connects to a brokerage account.
 - **Free and MIT licensed.** No paid tier, no account, no telemetry.
 
-**[Quick start](#quick-start)** · **[Releases](https://github.com/simonro/ai-research-desk/releases)** · **[Privacy](#privacy-and-your-data)**
+**[Quick start](#quick-start)** · **[Connect your AI plan](#connect-your-ai-plan)** · **[Releases](https://github.com/simonro/ai-research-desk/releases)** · **[Privacy](#privacy-and-your-data)**
 
 **What this is not:** not financial advice, not a signal service, and not a validated model. The
 ratings have not been shown to beat the market. Every screenshot below is synthetic demo data for
@@ -99,14 +99,18 @@ previous run. Here a stale filing has withheld one company's long-term rating.
 ## Quick start
 
 Requirements: [Python 3.12](https://www.python.org/downloads/) (ai-hedge-fund needs numpy 1.x,
-which has no wheels for newer Python on Windows), [git](https://git-scm.com/), and the CLI for your
-plan: [Claude Code](https://docs.claude.com/en/docs/claude-code) (`claude`) for a Claude plan, or the
-[Codex CLI](https://github.com/openai/codex) (`codex`) for a ChatGPT plan.
+which has no wheels for newer Python on Windows), [git](https://git-scm.com/), and a paid AI plan
+with its command-line tool (see [Connect your AI plan](#connect-your-ai-plan)).
 
-**Windows, two steps:** clone the repo with `git clone --recurse-submodules`, then double-click
+**Windows, four steps:** clone the repo with `git clone --recurse-submodules` (or download the ZIP
+from [Releases](https://github.com/simonro/ai-research-desk/releases)), then:
 
-1. `setup.bat`, once. It builds one environment per part and creates `~/.hedge-desk/.env`.
-2. `launch.bat`, every time. Then open http://localhost:8790
+1. Double-click `setup.bat`, once. It builds one environment per part and creates
+   `~/.hedge-desk/.env`.
+2. Open `~/.hedge-desk/.env` (`%USERPROFILE%\.hedge-desk\.env`) and set `SEC_USER_AGENT` to your
+   name and email. Add Alpaca keys if you have them; they are optional.
+3. Log in to your AI plan once, as described in [Connect your AI plan](#connect-your-ai-plan).
+4. Double-click `launch.bat`, every time. Then open http://localhost:8790
 
 **Manual setup (Mac, Linux, or if you prefer):**
 
@@ -115,18 +119,34 @@ git clone --recurse-submodules https://github.com/simonro/ai-research-desk
 cd ai-research-desk
 python3.12 install.py
 # edit ~/.hedge-desk/.env: set SEC_USER_AGENT, and Alpaca keys if you have them
-claude                      # log in once, if you use a Claude plan
+claude                      # log in once, if you use a Claude plan (see below for ChatGPT)
 scripts/run-dashboard.sh    # then open http://localhost:8790
 ```
 
 Every install starts empty: no runs and no demo data. Type a ticker in the dashboard, pick the
-teams, and start a run. A run with all three teams and a debate takes about 15 to 30 minutes.
+teams, and start a run. A run with all three teams and a debate takes about 10 to 30 minutes.
 
-### Using a ChatGPT plan
+## Connect your AI plan
 
-Set `DESK_PLAN=chatgpt` in `~/.hedge-desk/.env`, then log the desk in to your ChatGPT plan once. The
-desk keeps its own Codex login, separate from any you already use, so your personal Codex settings
-never reach the analysis:
+The desk has no API keys and no per-call bill. It sends every model call through the command-line
+tool of an AI subscription you already pay for, so runs count against that plan's usage. You need
+one of these, and you can set up both.
+
+**Claude** (the default). Needs a Claude Pro or Max plan.
+
+1. Install [Claude Code](https://docs.claude.com/en/docs/claude-code), which gives you the `claude`
+   command.
+2. Run `claude` once in a terminal and sign in with your Claude account. Then close it.
+
+That is all: `DESK_PLAN=claude` is the default. The desk removes any Anthropic API key from its
+calls, so they always go to your subscription, never to a metered key.
+
+**ChatGPT**. Needs a paid ChatGPT plan that includes Codex.
+
+1. Install the [Codex CLI](https://github.com/openai/codex): `npm install -g @openai/codex` (needs
+   [Node.js](https://nodejs.org/)).
+2. Log the desk in once. The desk keeps its own Codex login, separate from any you already use, so
+   your personal Codex settings never reach the analysis:
 
 ```bash
 # PowerShell
@@ -135,7 +155,18 @@ $env:CODEX_HOME="$HOME\.hedge-desk\codex"; New-Item -ItemType Directory -Force $
 mkdir -p ~/.hedge-desk/codex && CODEX_HOME=~/.hedge-desk/codex codex login
 ```
 
-One plan per run: a run is all Claude or all ChatGPT, and the memo records which.
+3. To make ChatGPT the default, set `DESK_PLAN=chatgpt` in `~/.hedge-desk/.env`.
+
+**Picking the plan.** The dashboard's run form has a Claude / ChatGPT switch that starts on your
+`DESK_PLAN` default; changing it applies to that run only. One plan per run: a run is all Claude or
+all ChatGPT, and the memo records which plan and models it used.
+
+**Usage limits.** A full run with all three teams and a debate makes dozens of model calls. On a
+smaller plan, such as Claude Pro, one or two full runs can reach your usage limit; larger plans have
+more room. Running one or two teams, or turning the debate off, uses less. If the limit is reached,
+or your login has expired, the run stops at once and saves nothing, rather than writing a
+half-finished memo. Log in again (`claude`, or the `codex login` command above) or wait for the
+limit to reset, then start the run again.
 
 ## Updating to a new release
 
