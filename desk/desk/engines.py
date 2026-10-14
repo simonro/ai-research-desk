@@ -170,13 +170,35 @@ def load_cli_reports(ticker: str, as_of: str, reports_dir: Path) -> dict:
             "usage": None, "reused": True, "source": str(reports_dir)}
 
 
+# The name pairs a keys file may hold, in the order they are tried.
+_KEY_PAIRS = (("ALPACA_API_KEY", "ALPACA_SECRET_KEY"), ("APCA_API_KEY_ID", "APCA_API_SECRET_KEY"),
+              ("ALPACA_PAPER_KEY_ID", "ALPACA_PAPER_SECRET_KEY"), ("ALPACA_TRADING_KEY", "ALPACA_TRADING_SECRET"))
+
+
+def data_keys_env(env: dict) -> dict:
+    """DESK_ALPACA_KEYS_FILE names a .env file holding the market-data keys every team should use.
+
+    The teams read ALPACA_API_KEY from the environment before any file of their own, so a stale
+    machine-wide key wins over a good one (COHR 2026-10-12: every Alpaca call answered 401 and
+    Edge scored data quality 0). The keys go to the child process only; nothing is written."""
+    path = env.get("DESK_ALPACA_KEYS_FILE")
+    values = provenance._dotenv(Path(path)) if path else {}
+    pair = next(((values[k], values[s]) for k, s in _KEY_PAIRS if values.get(k) and values.get(s)), None)
+    if not pair:
+        return env
+    env = {k: v for k, v in env.items() if not any(k in p for p in _KEY_PAIRS)}
+    env["ALPACA_API_KEY"], env["ALPACA_SECRET_KEY"] = pair
+    return env
+
+
 def _run(python: Path, cwd: Path, args: list, out: Path, log: Path, timeout: int,
          name: str, say, events: EventLog | None = None, allow_no_rating: bool = False,
          plan: str | None = None) -> dict:
     started = time.time()
     if out.exists():
         out.unlink()                 # a stale file must not pass for this run's output
-    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8", **(events.env if events else {})}
+    env = data_keys_env({**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8",
+                         **(events.env if events else {})})
     if plan in ("claude", "chatgpt"):
         env["DESK_PLAN"] = plan      # stated, so no team's own settings can pick another plan
     with open(log, "w", encoding="utf-8") as log_file:

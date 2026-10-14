@@ -147,3 +147,17 @@ def test_unknown_source_refuses_reuse_even_when_both_sides_are_unknown(monkeypat
     monkeypatch.setattr(prov, "source_digest", lambda folder: None)
     a = prov.expected("edge", "claude", "2026-10-06")
     assert "cannot be read" in prov.differs(a, prov.expected("edge", "claude", "2026-10-06"))
+
+
+def test_a_keys_file_hands_every_team_its_keys(tmp_path):
+    keys = tmp_path / "keys.env"
+    keys.write_text("ALPACA_PAPER_KEY_ID=good-id\nALPACA_PAPER_SECRET_KEY=good-secret\n", encoding="utf-8")
+    env = engines.data_keys_env({"ALPACA_API_KEY": "dead", "ALPACA_SECRET_KEY": "dead", "APCA_API_KEY_ID": "dead",
+                                 "PATH": "p", "DESK_ALPACA_KEYS_FILE": str(keys)})
+    assert env["ALPACA_API_KEY"] == "good-id" and env["ALPACA_SECRET_KEY"] == "good-secret"
+    assert "APCA_API_KEY_ID" not in env and "ALPACA_PAPER_KEY_ID" not in env and env["PATH"] == "p"
+    # No file, or a file without a full pair, leaves the environment as it was.
+    plain = {"ALPACA_API_KEY": "k", "ALPACA_SECRET_KEY": "s"}
+    assert engines.data_keys_env(plain) == plain
+    keys.write_text("ALPACA_PAPER_KEY_ID=only-id\n", encoding="utf-8")
+    assert engines.data_keys_env({**plain, "DESK_ALPACA_KEYS_FILE": str(keys)})["ALPACA_API_KEY"] == "k"
