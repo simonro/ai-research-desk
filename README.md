@@ -22,7 +22,7 @@ pick their own stocks and want a second, third and fourth opinion that shows its
 - **Research only.** It never places an order or connects to a brokerage account.
 - **Free and MIT licensed.** No paid tier, no account, no telemetry.
 
-**[Quick start](#quick-start)** · **[Connect your AI plan](#connect-your-ai-plan)** · **[Releases](https://github.com/simonro/ai-research-desk/releases)** · **[Privacy](#privacy-and-your-data)**
+**[Quick start](#quick-start)** · **[Connect your AI plan](#connect-your-ai-plan)** · **[Watch the video](https://youtu.be/3BXuemYYBLg)** · **[Releases](https://github.com/simonro/ai-research-desk/releases)** · **[Privacy](#privacy-and-your-data)**
 
 **What this is not:** not financial advice, not a signal service, and not a validated model. The
 ratings have not been shown to beat the market. Every screenshot below is synthetic demo data for
@@ -95,6 +95,12 @@ previous run. Here a stale filing has withheld one company's long-term rating.
 **The PDF summary.** Two pages: the same first screen and the debates in a few lines.
 
 ![The two-page PDF summary](docs/screenshot-brief.png)
+
+## Watch the video
+
+[![Watch: I Built a Free AI Stock Research Desk Where 3 AIs Argue](docs/video-thumbnail.jpg)](https://youtu.be/3BXuemYYBLg)
+
+Three AI research teams take the same stock, argue it out for a swing and a long-term call, and the desk writes up where they agree and where they do not.
 
 ## Quick start
 
