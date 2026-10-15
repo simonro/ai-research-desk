@@ -148,6 +148,18 @@ def test_warnings_are_computed_from_the_saved_run():
     assert "withheld_lt" in kinds and "stale" not in kinds and "prices" not in kinds
 
 
+def test_a_run_without_alpaca_says_so():
+    vets, edge = {"inputs": {"data": {"alpaca": False, "provider": "free"}}}, {"inputs": {"data": {"alpaca": False}}, "rating": "Hold"}
+    flag = {f["kind"]: f for f in runview.run_flags({}, vets, edge, ["vets", "edge"])}["no_alpaca"]
+    assert flag["level"] == "info" and "the Veterans and Edge Desk" in flag["text"] and "Yahoo" in flag["text"]
+    # Only the teams that ran without it are named; with Alpaca, or a run from before inputs were
+    # recorded, there is no flag.
+    assert "Edge" not in {f["kind"]: f for f in runview.run_flags({}, vets, None, ["vets"])}["no_alpaca"]["text"]
+    with_keys = {"inputs": {"data": {"alpaca": True}}}
+    assert not any(f["kind"] == "no_alpaca" for f in runview.run_flags({}, with_keys, {"rating": "Hold"}, ["vets", "edge"]))
+    assert not any(f["kind"] == "no_alpaca" for f in runview.run_flags({}, {}, None, ["vets"]))
+
+
 def test_edge_steps_are_counted_apart():
     assert runview.step_state(True, None) == "ok"
     assert runview.step_state(False, "skipped: both cases failed") == "skipped"

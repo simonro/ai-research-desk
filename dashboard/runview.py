@@ -307,6 +307,13 @@ def run_flags(bundle: dict, aihf: dict | None, edge: dict | None, engines: list[
         out.append({"kind": "prices", "level": "warn",
                     "text": check.get("problem") and f"Teams priced from different sessions ({check['problem']})."
                             or f"Teams priced from different sessions: Veterans {str(pv)[:10]}, Edge Desk {str(pe)[:10]}."})
+    # Recorded per team in its inputs since provenance v3; an older run without it says nothing.
+    no_alpaca = [name for name, t in (("the Veterans", aihf), ("Edge Desk", edge))
+                 if ((t or {}).get("inputs") or {}).get("data", {}).get("alpaca") is False]
+    if no_alpaca:
+        out.append({"kind": "no_alpaca", "level": "info",
+                    "text": f"No Alpaca keys: prices came from Yahoo, and {' and '.join(no_alpaca)} had no "
+                            "Benzinga headlines (news, earnings surprises). Add Alpaca keys for the full read."})
     if edge is not None and "edge" in engines and not edge.get("rating"):
         out.append({"kind": "edge_withheld", "level": "info",
                     "text": "Edge Desk withheld its rating, so it votes nowhere."})
