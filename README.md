@@ -231,7 +231,6 @@ call on top of the AI plan I already have. Simon, Tape to Edge.
 
 - YouTube: [@tapetoedge](https://www.youtube.com/@tapetoedge)
 - X: [@tapetoedge](https://x.com/tapetoedge)
-- Newsletter: [tape-to-edge.beehiiv.com](https://tape-to-edge.beehiiv.com)
 
 I take no affiliate money from any tool I show, and this project has no paid tier, no account and
 no telemetry. If it is useful, fork it.
