@@ -9,6 +9,7 @@ the dashboard's live view shows. The merged final state is identical to what inv
 """
 
 import json
+import os
 import re
 import sys
 import time
@@ -25,9 +26,17 @@ usage_meter.install()
 
 from dotenv import load_dotenv  # noqa: E402
 
-TA_DIR = DESK_DIR.parent / "TradingAgents"
+from desk.config import TA_DIR  # noqa: E402  (engines/ in the public layout, beside desk/ in the original)
+
 sys.path.insert(0, str(TA_DIR))     # the checkout wins over any older copy installed in the venv
 load_dotenv(TA_DIR / ".env", override=False)
+# With no TRADINGAGENTS_* setting anywhere, TradingAgents falls back to its upstream OpenAI
+# defaults (gpt-5.6), which neither plan can answer: a ChatGPT account refuses it (COHR,
+# 2026-10-12) and Claude has no such model. The desk's roles map on both plans.
+for _key, _value in (("TRADINGAGENTS_LLM_PROVIDER", "anthropic"),
+                     ("TRADINGAGENTS_DEEP_THINK_LLM", "claude-opus-5-5"),
+                     ("TRADINGAGENTS_QUICK_THINK_LLM", "claude-sonnet-5")):
+    os.environ.setdefault(_key, _value)
 
 from tradingagents.default_config import DEFAULT_CONFIG  # noqa: E402
 from tradingagents.graph.trading_graph import TradingAgentsGraph  # noqa: E402

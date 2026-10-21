@@ -36,6 +36,15 @@ def test_a_command_or_tool_in_the_event_stream_is_caught():
     assert ev["stray"] == ["command_execution"] and ev["usage"]["input_tokens"] == 12
 
 
+def test_a_non_fatal_error_item_is_not_a_tool():
+    # COHR 2026-10-12: the Research Manager's call was refused as "codex exec used error".
+    events = "\n".join(['{"type":"item.completed","item":{"type":"error","message":"Reconnecting... 1/5"}}',
+                        '{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}',
+                        '{"type":"turn.completed","usage":{"input_tokens":5,"output_tokens":1}}'])
+    ev = chatgpt.read_events(events)
+    assert ev["stray"] == [] and ev["errors"] == []
+
+
 def _fake(monkeypatch, **result):
     base = {"text": '{"rating": "Hold"}', "data": {"rating": "Hold"}, "model": "gpt-6-luna", "seconds": 1.0,
             "failed": False, "error": "", "stray": [], "usage": {"input": 10, "output": 2}}

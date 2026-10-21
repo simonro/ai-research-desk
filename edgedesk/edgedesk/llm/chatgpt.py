@@ -116,6 +116,10 @@ def read_events(stdout: str) -> dict:
         elif kind in ("error", "turn.failed"):
             errors.append(str(e.get("message") or (e.get("error") or {}).get("message") or e))
         item = e.get("item") or {}
+        # An "error" item is Codex's non-fatal notice (a stream reconnect, a model-metadata
+        # warning), not a tool: the turn carries on, and turn.failed still catches a real failure.
+        if item.get("type") == "error":
+            continue
         if item.get("type") and item["type"] not in ALLOWED_ITEMS:
             stray.append(item["type"])
     return {"usage": usage, "errors": errors, "stray": stray}
